@@ -9,6 +9,10 @@ readme = "README.md"
 python = "^3.12"
 openai = "^1.35.9"
 python-dotenv = "^1.0.1"
+moviepy = "^1.0.3"
+pydub = "^0.25.1"
+openai-whisper = "^20231117"
+tqdm = "^4.66.4"
 
 
 [build-system]
