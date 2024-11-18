@@ -16,7 +16,7 @@ transcription_text = result['text']
 print("Transcription:\n", transcription_text)
 
 # Save the transcription to a .txt file
-output_file_path = "jordan-2024-09-12-04-11-20.txt"
+output_file_path = "../data/jordan-2024-09-12-04-11-20.txt"
 with open(output_file_path, "w") as output_file:
     output_file.write(transcription_text)
 

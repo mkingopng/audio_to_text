@@ -1,5 +1,5 @@
 """
-
+transcribe the audio from a video file and save the transcription to a text file
 """
 import whisper
 import os

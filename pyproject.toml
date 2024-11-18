@@ -13,7 +13,6 @@ moviepy = "^1.0.3"
 pydub = "^0.25.1"
 openai-whisper = "^20231117"
 tqdm = "^4.66.4"
-whisper = "^1.1.10"
 
 
 [build-system]
