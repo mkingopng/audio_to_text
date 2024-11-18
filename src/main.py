@@ -1,34 +1,22 @@
 """
 asdf
 """
-import os
-import openai
+import whisper
 
-# set your OpenAI API key
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# Load the model
+model = whisper.load_model("base")
 
-# path to your audio file
-audio_file_path = "data/file.mp3"
+# Transcribe the audio file
+result = model.transcribe("./../data/jordan-2024-09-12-04-11-20.m4a")
 
-# read the audio file
-with open(audio_file_path, "rb") as audio_file:
-    audio_content = audio_file.read()
+# Get the transcription text
+transcription_text = result['text']
 
-# use the Whisper model to transcribe the audio
-response = openai.Audio.transcribe(
-    model="whisper-1",
-    file=audio_content,
-    response_format="text"
-)
-
-# get the transcription text
-transcription_text = response['text']
-
-# print the transcription
+# Print the transcription
 print("Transcription:\n", transcription_text)
 
-# save the transcription to a .txt file
-output_file_path = "transcription_output.txt"
+# Save the transcription to a .txt file
+output_file_path = "jordan-2024-09-12-04-11-20.txt"
 with open(output_file_path, "w") as output_file:
     output_file.write(transcription_text)
 
