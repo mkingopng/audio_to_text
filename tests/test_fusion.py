@@ -1,4 +1,5 @@
 """Unit tests for src/fusion.py -- dual-source sync, speaker matching, turn merging."""
+import pytest
 import numpy as np
 from scipy.io import wavfile
 
@@ -47,3 +48,42 @@ def test_match_speakers_recovers_permutation_across_relabeled_sources():
     mapping = match_speakers(embeddings_a, embeddings_b)
 
     assert mapping == {"SPEAKER_00": "SPK_A", "SPEAKER_01": "SPK_B", "SPEAKER_02": "SPK_C"}
+
+
+def test_match_speakers_uses_hungarian_not_greedy_nearest_match():
+    """Greedy nearest-match would assign A_0→B_0, A_1→B_2, A_2→B_1 (cost 0.0641).
+    Hungarian finds the globally optimal A_0→B_2, A_1→B_0, A_2→B_1 (cost 0.019).
+    This test verifies that match_speakers does NOT use greedy."""
+    embeddings_a = {
+        "A_0": _unit_vector(0),
+        "A_1": _unit_vector(10),
+        "A_2": _unit_vector(160),
+    }
+    embeddings_b = {
+        "B_0": _unit_vector(5),
+        "B_1": _unit_vector(160),
+        "B_2": _unit_vector(350),
+    }
+
+    mapping = match_speakers(embeddings_a, embeddings_b)
+
+    # Greedy (processing A in order) would pick: A_0→B_0, A_1→B_2, A_2→B_1
+    # Hungarian (optimal) picks: A_0→B_2, A_1→B_0, A_2→B_1
+    assert mapping == {"A_0": "B_2", "A_1": "B_0", "A_2": "B_1"}
+
+
+def test_match_speakers_raises_on_mismatched_sizes():
+    """linear_sum_assignment silently returns partial mappings for rectangular matrices.
+    match_speakers must explicitly guard against this, raising ValueError."""
+    embeddings_a = {
+        "A_0": _unit_vector(0),
+        "A_1": _unit_vector(120),
+    }
+    embeddings_b = {
+        "B_0": _unit_vector(0),
+        "B_1": _unit_vector(120),
+        "B_2": _unit_vector(240),
+    }
+
+    with pytest.raises(ValueError, match="len\\(embeddings_a\\) != len\\(embeddings_b\\)"):
+        match_speakers(embeddings_a, embeddings_b)

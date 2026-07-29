@@ -46,7 +46,16 @@ def match_speakers(embeddings_a: dict[str, np.ndarray], embeddings_b: dict[str, 
     (assigning both of B's closest speakers to the same A speaker, then being
     forced into a bad leftover pairing); the Hungarian algorithm finds the
     globally optimal one-to-one assignment instead.
+
+    Raises ValueError if the two embedding dicts have different sizes, since
+    linear_sum_assignment on a rectangular matrix silently returns only
+    min(len(A), len(B)) pairs, corrupting downstream fusion with no error.
     """
+    if len(embeddings_a) != len(embeddings_b):
+        raise ValueError(
+            f"len(embeddings_a) != len(embeddings_b): {len(embeddings_a)} vs {len(embeddings_b)}"
+        )
+
     labels_a = list(embeddings_a.keys())
     labels_b = list(embeddings_b.keys())
     matrix_a = np.stack([embeddings_a[label] for label in labels_a])
