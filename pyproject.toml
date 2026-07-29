@@ -9,5 +9,13 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "mlx-whisper>=0.4.3",
+    "pyannote-audio>=4.0.7",
+    "python-dotenv>=1.2.2",
+    "scipy>=1.18.0",
     "tqdm>=4.66",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
 ]
