@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 from scipy import signal
 from scipy.io import wavfile
+from scipy.optimize import linear_sum_assignment
 
 
 def _rms_envelope(samples: np.ndarray, sample_rate: int, window_seconds: float) -> np.ndarray:
@@ -36,3 +37,25 @@ def find_offset(wav_a: Path, wav_b: Path, *, window_seconds: float = 0.1) -> flo
     correlation = signal.correlate(envelope_a, envelope_b, mode="full", method="fft")
     lag_index = int(np.argmax(correlation)) - (len(envelope_b) - 1)
     return lag_index * window_seconds
+
+
+def match_speakers(embeddings_a: dict[str, np.ndarray], embeddings_b: dict[str, np.ndarray]) -> dict[str, str]:
+    """Match source A's speaker embeddings to source B's via the Hungarian algorithm.
+
+    Greedy nearest-match can be led astray when two voices are close together
+    (assigning both of B's closest speakers to the same A speaker, then being
+    forced into a bad leftover pairing); the Hungarian algorithm finds the
+    globally optimal one-to-one assignment instead.
+    """
+    labels_a = list(embeddings_a.keys())
+    labels_b = list(embeddings_b.keys())
+    matrix_a = np.stack([embeddings_a[label] for label in labels_a])
+    matrix_b = np.stack([embeddings_b[label] for label in labels_b])
+
+    normalized_a = matrix_a / np.linalg.norm(matrix_a, axis=1, keepdims=True)
+    normalized_b = matrix_b / np.linalg.norm(matrix_b, axis=1, keepdims=True)
+    similarity = normalized_a @ normalized_b.T
+    cost = 1.0 - similarity
+
+    row_indices, col_indices = linear_sum_assignment(cost)
+    return {labels_a[row]: labels_b[col] for row, col in zip(row_indices, col_indices)}
