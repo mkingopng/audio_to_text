@@ -427,6 +427,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Exact speaker count for diarization, if known (improves clustering accuracy). "
              "Default: auto-detect.",
     )
+    parser.add_argument(
+        "--fuse",
+        type=Path,
+        default=None,
+        help="A second recording of the SAME meeting (e.g. a phone recording from a "
+             "different position). Triggers dual-source fusion: 'media' must be a "
+             "single file, not a directory.",
+    )
     args = parser.parse_args(argv)
 
     ensure_apple_silicon()
@@ -436,6 +444,27 @@ def main(argv: list[str] | None = None) -> int:
         where = args.media or DEFAULT_INPUT_DIR
         print(f"error: no media files found in '{where}'", file=sys.stderr)
         return 1
+
+    if args.fuse is not None:
+        if args.media is None or args.media.is_dir():
+            print("error: --fuse requires 'media' to be a single file, not a directory/default batch", file=sys.stderr)
+            return 1
+        load_dotenv()
+        diarization_pipeline = load_diarization_pipeline(os.environ.get("HF_TOKEN"))
+        output_dir = (args.output_dir or DEFAULT_OUTPUT_DIR).resolve()
+        from src.fusion import run_fusion
+        out_path = run_fusion(
+            args.media,
+            args.fuse,
+            model_repo=resolve_model_repo(args.model),
+            language=None if args.language == "auto" else args.language,
+            initial_prompt=args.prompt,
+            num_speakers=args.num_speakers,
+            output_dir=output_dir,
+            diarization_pipeline=diarization_pipeline,
+        )
+        print(f"Fused transcript written to {out_path}")
+        return 0
 
     do_preprocess = args.preprocess or args.denoise or args.audio_filter is not None
     audio_filter = args.audio_filter or (build_audio_filter(args.denoise) if do_preprocess else None)

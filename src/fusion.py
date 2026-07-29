@@ -14,7 +14,17 @@ from scipy import signal
 from scipy.io import wavfile
 from scipy.optimize import linear_sum_assignment
 
-from src.transcribe import overlap_seconds
+from src.transcribe import (
+    align_words_to_speakers,
+    _group_consecutive,
+    extract_words,
+    overlap_seconds,
+    preprocess_audio,
+    relabel_speakers,
+    render_markdown,
+    run_diarization,
+    run_whisper,
+)
 
 
 def _rms_envelope(samples: np.ndarray, sample_rate: int, window_seconds: float) -> np.ndarray:
@@ -112,3 +122,53 @@ def merge_turns(turns_a: list[dict], turns_b_shifted: list[dict]) -> list[dict]:
 
     merged.sort(key=lambda t: t["start"])
     return merged
+
+
+def _process_source(media_path: Path, tmp_dir: Path, *, model_repo, language, initial_prompt, num_speakers, diarization_pipeline):
+    wav_path = preprocess_audio(media_path, tmp_dir, None)
+    result = run_whisper(wav_path, model_repo=model_repo, language=language, initial_prompt=initial_prompt)
+    words = extract_words(result)
+    turns, embeddings = run_diarization(wav_path, diarization_pipeline, num_speakers=num_speakers)
+    aligned = align_words_to_speakers(words, turns)
+    return wav_path, _group_consecutive(aligned), embeddings
+
+
+def run_fusion(
+    primary_path: Path,
+    secondary_path: Path,
+    *,
+    model_repo: str,
+    language: str | None,
+    initial_prompt: str | None,
+    num_speakers: int | None,
+    output_dir: Path,
+    diarization_pipeline,
+) -> Path:
+    """Fuse two recordings of the same meeting into one Person-N Markdown transcript."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="whisper_fuse_") as tmp:
+        tmp_dir = Path(tmp)
+        wav_a, turns_a, embeddings_a = _process_source(
+            primary_path, tmp_dir, model_repo=model_repo, language=language,
+            initial_prompt=initial_prompt, num_speakers=num_speakers,
+            diarization_pipeline=diarization_pipeline,
+        )
+        wav_b, turns_b, embeddings_b = _process_source(
+            secondary_path, tmp_dir, model_repo=model_repo, language=language,
+            initial_prompt=initial_prompt, num_speakers=num_speakers,
+            diarization_pipeline=diarization_pipeline,
+        )
+
+        offset = find_offset(wav_a, wav_b)
+        speaker_map_a_to_b = match_speakers(embeddings_a, embeddings_b)
+        speaker_map_b_to_a = {b: a for a, b in speaker_map_a_to_b.items()}
+        turns_b_shifted = _shift_and_remap(turns_b, offset, speaker_map_b_to_a)
+
+        merged = merge_turns(turns_a, turns_b_shifted)
+        speaker_turns = relabel_speakers(merged)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / f"{primary_path.stem}.md"
+    out_path.write_text(render_markdown(speaker_turns), encoding="utf-8")
+    return out_path
