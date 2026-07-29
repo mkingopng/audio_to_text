@@ -226,3 +226,43 @@ def test_run_diarization_warns_on_speaker_count_mismatch(capsys):
 def test_load_diarization_pipeline_raises_clear_error_without_token():
     with pytest.raises(RuntimeError, match="HF_TOKEN"):
         load_diarization_pipeline(None)
+
+
+def test_main_continues_batch_after_diarization_failure(tmp_path, capsys):
+    """A diarization/alignment failure on one file must not abort the rest of the batch.
+
+    Mirrors the existing FileNotFoundError/CalledProcessError per-file resilience:
+    the failing file is counted and skipped, the next file still gets written.
+    """
+    import src.transcribe as t
+
+    media_files = [Path("fake1.m4a"), Path("fake2.m4a")]
+    fake_result = {
+        "segments": [
+            {"words": [{"word": "hi", "start": 0.0, "end": 0.5, "probability": 0.9}]},
+        ],
+    }
+
+    call_count = {"n": 0}
+
+    def fake_run_diarization(source, pipeline, *, num_speakers=None):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            # simulate a near-silent/short file: pyannote detects zero turns,
+            # which align_words_to_speakers turns into a ValueError.
+            raise ValueError("align_words_to_speakers: no diarization turns to align against")
+        return [{"start": 0.0, "end": 1.0, "speaker": "SPEAKER_00"}], {}
+
+    with patch.object(t, "ensure_apple_silicon"), \
+         patch.object(t, "gather_media", return_value=media_files), \
+         patch.object(t, "load_dotenv"), \
+         patch.object(t, "load_diarization_pipeline", return_value=object()), \
+         patch.object(t, "preprocess_audio", side_effect=lambda media_path, tmp_dir, audio_filter: media_path), \
+         patch.object(t, "run_whisper", return_value=fake_result), \
+         patch.object(t, "run_diarization", side_effect=fake_run_diarization):
+        exit_code = t.main(["ignored.m4a", "--output-dir", str(tmp_path)])
+
+    assert exit_code == 1  # one of two files failed
+    assert not (tmp_path / "fake1.md").exists()
+    assert (tmp_path / "fake2.md").exists()
+    assert "error: diarization failed for 'fake1.m4a'" in capsys.readouterr().err

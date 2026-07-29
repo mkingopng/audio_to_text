@@ -137,6 +137,18 @@ def overlap_seconds(a_start: float, a_end: float, b_start: float, b_end: float) 
     return max(0.0, min(a_end, b_end) - max(a_start, b_start))
 
 
+class DiarizationError(RuntimeError):
+    """Wraps any failure from diarizing/aligning/grouping one file.
+
+    main()'s per-file loop already treats FileNotFoundError and
+    subprocess.CalledProcessError as skip-this-file-and-continue; this lets it
+    do the same for diarization-step failures (e.g. pyannote raising on one
+    file's audio, or align_words_to_speakers's ValueError when zero speaker
+    turns were detected) without having to catch bare Exception around the
+    whole per-file try block.
+    """
+
+
 def align_words_to_speakers(words: list[dict], turns: list[dict]) -> list[dict]:
     """Assign each word to the diarization turn it overlaps most.
 
@@ -460,11 +472,21 @@ def main(argv: list[str] | None = None) -> int:
                     verbose=True if args.verbose else None,
                 )
                 print(f"Diarizing '{media_path.name}' ...")
-                turns, _embeddings = run_diarization(
-                    source, diarization_pipeline, num_speakers=args.num_speakers
-                )
-                aligned_words = align_words_to_speakers(extract_words(result), turns)
-                speaker_turns = group_into_turns(aligned_words)
+                try:
+                    turns, _embeddings = run_diarization(
+                        source, diarization_pipeline, num_speakers=args.num_speakers
+                    )
+                    aligned_words = align_words_to_speakers(extract_words(result), turns)
+                    speaker_turns = group_into_turns(aligned_words)
+                except Exception as exc:
+                    # Narrowly scoped to the diarization/alignment/grouping calls only
+                    # (not the whole per-file try block) -- covers both
+                    # align_words_to_speakers's ValueError on zero detected turns and
+                    # arbitrary errors the pyannote pipeline itself can raise for one
+                    # file's audio, without masking bugs elsewhere in the loop body.
+                    raise DiarizationError(
+                        f"diarization failed for '{media_path.name}': {exc}"
+                    ) from exc
             except FileNotFoundError as exc:
                 print(f"error: {exc}", file=sys.stderr)
                 failures += 1
@@ -473,6 +495,10 @@ def main(argv: list[str] | None = None) -> int:
                 stderr = exc.stderr.decode(errors="replace") if exc.stderr else ""
                 print(f"error: ffmpeg preprocessing failed for '{media_path.name}':\n{stderr}",
                       file=sys.stderr)
+                failures += 1
+                continue
+            except DiarizationError as exc:
+                print(f"error: {exc}", file=sys.stderr)
                 failures += 1
                 continue
             # Name the output after the original file, not the temp cleaned WAV.
