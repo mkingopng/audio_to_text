@@ -14,6 +14,8 @@ from scipy import signal
 from scipy.io import wavfile
 from scipy.optimize import linear_sum_assignment
 
+from src.transcribe import overlap_seconds
+
 
 def _rms_envelope(samples: np.ndarray, sample_rate: int, window_seconds: float) -> np.ndarray:
     """Windowed RMS energy envelope -- correlating on this is faster and more robust
@@ -68,3 +70,45 @@ def match_speakers(embeddings_a: dict[str, np.ndarray], embeddings_b: dict[str, 
 
     row_indices, col_indices = linear_sum_assignment(cost)
     return {labels_a[row]: labels_b[col] for row, col in zip(row_indices, col_indices)}
+
+
+def _shift_and_remap(turns: list[dict], offset: float, speaker_map: dict[str, str]) -> list[dict]:
+    """Move turns from source B's local clock/speaker-id namespace onto source A's."""
+    return [
+        {**turn, "start": turn["start"] + offset, "end": turn["end"] + offset, "speaker": speaker_map[turn["speaker"]]}
+        for turn in turns
+    ]
+
+
+def merge_turns(turns_a: list[dict], turns_b_shifted: list[dict]) -> list[dict]:
+    """Merge two sources' turns (already sharing a timeline + speaker-id namespace).
+
+    Source A's turns define the canonical paragraph boundaries. A turn is
+    replaced by B's overlapping text only when B's confidence is strictly
+    higher (selection happens at turn granularity, not per-word -- splicing
+    two independently-run ASR passes word-by-word risks garbled sentences
+    where the two passes segment speech slightly differently).
+    """
+    merged = []
+    for turn in turns_a:
+        overlapping_b = [
+            b for b in turns_b_shifted
+            if b["speaker"] == turn["speaker"]
+            and overlap_seconds(turn["start"], turn["end"], b["start"], b["end"]) > 0
+        ]
+        if overlapping_b:
+            best_b = max(overlapping_b, key=lambda b: b["confidence"])
+            if best_b["confidence"] > turn["confidence"]:
+                merged.append({**turn, "text": best_b["text"], "confidence": best_b["confidence"]})
+                continue
+        merged.append(turn)
+
+    for turn in turns_b_shifted:
+        overlaps_any_a = any(
+            overlap_seconds(turn["start"], turn["end"], a["start"], a["end"]) > 0 for a in turns_a
+        )
+        if not overlaps_any_a:
+            merged.append(turn)
+
+    merged.sort(key=lambda t: t["start"])
+    return merged

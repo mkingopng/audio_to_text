@@ -87,3 +87,37 @@ def test_match_speakers_raises_on_mismatched_sizes():
 
     with pytest.raises(ValueError, match="len\\(embeddings_a\\) != len\\(embeddings_b\\)"):
         match_speakers(embeddings_a, embeddings_b)
+
+
+from src.fusion import _shift_and_remap, merge_turns
+
+
+def test_shift_and_remap_applies_offset_and_speaker_map():
+    turns = [{"speaker": "SPEAKER_00", "start": 1.0, "end": 2.0, "text": "hi", "confidence": 0.5}]
+
+    result = _shift_and_remap(turns, offset=10.0, speaker_map={"SPEAKER_00": "SPEAKER_01"})
+
+    assert result == [{"speaker": "SPEAKER_01", "start": 11.0, "end": 12.0, "text": "hi", "confidence": 0.5}]
+
+
+def test_merge_turns_prefers_higher_confidence_source_and_appends_gaps():
+    turns_a = [
+        {"speaker": "A0", "start": 0.0, "end": 5.0, "text": "hello from a", "confidence": 0.5},
+        {"speaker": "A1", "start": 5.0, "end": 9.0, "text": "garbled b word", "confidence": 0.3},
+    ]
+    turns_b_shifted = [
+        # overlaps turn 2, HIGHER confidence -> should replace turn 2's text
+        {"speaker": "A1", "start": 5.1, "end": 8.9, "text": "clear phone audio", "confidence": 0.9},
+        # overlaps turn 1, LOWER confidence -> must NOT replace turn 1's text
+        {"speaker": "A0", "start": 0.2, "end": 4.8, "text": "quieter mic", "confidence": 0.2},
+        # doesn't overlap any A turn at all -> appended as a gap-fill
+        {"speaker": "A2", "start": 9.0, "end": 11.0, "text": "only caught by phone", "confidence": 0.8},
+    ]
+
+    merged = merge_turns(turns_a, turns_b_shifted)
+
+    assert merged == [
+        {"speaker": "A0", "start": 0.0, "end": 5.0, "text": "hello from a", "confidence": 0.5},
+        {"speaker": "A1", "start": 5.0, "end": 9.0, "text": "clear phone audio", "confidence": 0.9},
+        {"speaker": "A2", "start": 9.0, "end": 11.0, "text": "only caught by phone", "confidence": 0.8},
+    ]
