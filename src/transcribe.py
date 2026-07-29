@@ -1,0 +1,282 @@
+"""
+Transcribe audio or video files to text using Whisper on the Apple GPU (MLX).
+
+Runs OpenAI's Whisper models via Apple's MLX framework, which executes natively
+on Apple Silicon GPUs (Metal) -- far faster than the CPU-only path of the
+reference `openai-whisper` package. ffmpeg (used by MLX) decodes the audio track
+directly, so audio files (.m4a, .mp3, .wav, ...) and video files (.mp4, .mov, ...)
+both work through the same path -- no separate audio-extraction step is required.
+
+Run with no arguments (e.g. the IDE "Run" button) to transcribe every media
+file in the project's data/ folder, writing a .txt per file to output/:
+
+    uv run python src/transcribe.py
+
+Or point it at a specific file or directory:
+
+    uv run python src/transcribe.py "data/Crisis shield m1.m4a"
+    uv run python src/transcribe.py "data/Crisis_shield_m2_3_July_2026.mov" --preprocess --denoise --prompt "Allan, Michael"
+
+    uv run python src/transcribe.py meeting.mp4 --prompt "Crisis Shield, ZeroW, Margu"
+
+Pass --preprocess to clean the audio with ffmpeg first (high-pass + loudness
+normalization), and add --denoise for an extra FFT noise-reduction pass:
+
+    uv run python src/transcribe.py --preprocess --denoise
+"""
+from __future__ import annotations
+
+import argparse
+import platform
+import shutil
+import subprocess
+import sys
+import tempfile
+from collections.abc import Iterable
+from pathlib import Path
+
+import mlx_whisper
+from tqdm import tqdm
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_INPUT_DIR = PROJECT_ROOT / "data"
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output"
+
+# Friendly model names -> Hugging Face repos of MLX-converted Whisper weights.
+# Any value containing "/" is treated as a full HF repo id and used verbatim.
+MODEL_REPOS = {
+    "large-v3": "mlx-community/whisper-large-v3-mlx",
+    "large-v3-turbo": "mlx-community/whisper-large-v3-turbo",
+    "turbo": "mlx-community/whisper-large-v3-turbo",
+}
+
+# Media containers Whisper can read via ffmpeg (audio and video alike).
+MEDIA_EXTENSIONS = {
+    ".m4a", ".mp3", ".wav", ".flac", ".ogg", ".oga", ".opus", ".aac", ".m4b", ".wma",
+    ".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".mpg", ".mpeg", ".wmv",
+}
+
+
+def resolve_model_repo(name: str) -> str:
+    """Map a friendly model name to an MLX Hugging Face repo (or pass a repo id through)."""
+    if "/" in name:
+        return name
+    return MODEL_REPOS.get(name, name)
+
+
+def gather_media(target: Path | None) -> list[Path]:
+    """Resolve a CLI target into a concrete list of media files.
+
+    - None            -> every media file in the default data/ folder
+    - a directory     -> every media file directly inside it
+    - a specific file -> just that file (existence is checked in run_whisper())
+    """
+    if target is None:
+        target = DEFAULT_INPUT_DIR
+    if target.is_dir():
+        return sorted(
+            p for p in target.iterdir()
+            if p.is_file() and p.suffix.lower() in MEDIA_EXTENSIONS
+        )
+    return [target]
+
+
+def build_audio_filter(denoise: bool) -> str:
+    """Build an ffmpeg -af chain tuned for speech going into Whisper.
+
+    - highpass  : remove sub-80 Hz rumble / handling noise / HVAC hum
+    - afftdn     : optional gentle FFT noise reduction (opt-in; can add artifacts)
+    - loudnorm   : EBU R128 loudness normalization so quiet/uneven levels are
+                   brought to a consistent target Whisper handles better
+    """
+    parts = ["highpass=f=80"]
+    if denoise:
+        parts.append("afftdn=nf=-25")
+    parts.append("loudnorm=I=-16:TP=-1.5:LRA=11")
+    return ",".join(parts)
+
+
+def preprocess_audio(media_path: Path, tmp_dir: Path, audio_filter: str) -> Path:
+    """Clean an audio/video file with ffmpeg into a 16 kHz mono WAV for Whisper.
+
+    Returns the path to the cleaned WAV inside ``tmp_dir``. Whisper resamples to
+    16 kHz mono anyway, so emitting that here costs nothing and lets ffmpeg do the
+    filtering in one pass.
+    """
+    if shutil.which("ffmpeg") is None:
+        raise FileNotFoundError("ffmpeg not found on PATH; cannot preprocess audio.")
+
+    cleaned = tmp_dir / (media_path.stem + ".clean.wav")
+    subprocess.run(
+        [
+            "ffmpeg", "-nostdin", "-y", "-i", str(media_path),
+            "-af", audio_filter,
+            "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
+            str(cleaned),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return cleaned
+
+
+def run_whisper(
+    media_path: Path,
+    *,
+    model_repo: str,
+    language: str | None = "en",
+    initial_prompt: str | None = None,
+    verbose: bool | None = None,
+) -> dict:
+    """Transcribe one audio/video file on the Apple GPU and return the result dict.
+
+    Thin seam over mlx_whisper.transcribe(). MLX caches the loaded model per repo,
+    so a batch downloads/loads the weights only once. Whisper handles arbitrarily
+    long media itself (30 s sliding window with context carried between windows)
+    and draws its own per-file progress bar while decoding.
+    """
+    if not media_path.exists():
+        raise FileNotFoundError(f"Input file not found: {media_path}")
+
+    # language (and any future decode options) go through mlx_whisper's
+    # **decode_options; omit it entirely to let Whisper auto-detect.
+    decode_options: dict = {}
+    if language is not None:
+        decode_options["language"] = language
+    return mlx_whisper.transcribe(
+        str(media_path),
+        path_or_hf_repo=model_repo,
+        initial_prompt=initial_prompt,
+        verbose=verbose,
+        **decode_options,
+    )
+
+
+def ensure_apple_silicon() -> None:
+    """Fail fast on non-Apple-Silicon hosts -- MLX is the only engine, no fallback."""
+    if platform.system() != "Darwin" or platform.machine() != "arm64":
+        print(
+            "error: mlx-whisper requires Apple Silicon (arm64 macOS); "
+            f"this host is {platform.system()}/{platform.machine()}.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Transcribe audio or video files to text using Whisper on the Apple GPU (MLX).",
+    )
+    parser.add_argument(
+        "media",
+        type=Path,
+        nargs="?",
+        default=None,
+        help="Audio/video file or directory (default: the project's data/ folder).",
+    )
+    parser.add_argument(
+        "--model",
+        default="turbo",
+        help="Model name (turbo, large-v3) or a full MLX Hugging Face repo id "
+             "(default: turbo -- best speed on the GPU, near-large-v3 accuracy).",
+    )
+    parser.add_argument(
+        "--language",
+        default="en",
+        help="Language code, or 'auto' to let Whisper detect it (default: en).",
+    )
+    parser.add_argument(
+        "--prompt",
+        default=None,
+        help="initial_prompt to bias the spelling of names/jargon.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Directory to write .txt outputs to (default: the project's output/ folder).",
+    )
+    parser.add_argument(
+        "--preprocess",
+        action="store_true",
+        help="Clean audio with ffmpeg first (high-pass + loudness normalization).",
+    )
+    parser.add_argument(
+        "--denoise",
+        action="store_true",
+        help="Add an FFT noise-reduction pass to preprocessing (implies --preprocess).",
+    )
+    parser.add_argument(
+        "--audio-filter",
+        default=None,
+        help="Override the ffmpeg -af filter chain used when preprocessing.",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Also stream each segment to the console as it is decoded.",
+    )
+    args = parser.parse_args(argv)
+
+    ensure_apple_silicon()
+
+    media_files = gather_media(args.media)
+    if not media_files:
+        where = args.media or DEFAULT_INPUT_DIR
+        print(f"error: no media files found in '{where}'", file=sys.stderr)
+        return 1
+
+    do_preprocess = args.preprocess or args.denoise or args.audio_filter is not None
+    audio_filter = args.audio_filter or build_audio_filter(args.denoise)
+    model_repo = resolve_model_repo(args.model)
+
+    output_dir = (args.output_dir or DEFAULT_OUTPUT_DIR).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Model: {model_repo} (first run downloads the weights from Hugging Face)")
+    if do_preprocess:
+        print(f"Preprocessing audio with ffmpeg filter: {audio_filter}")
+
+    # Outer progress bar across files (only shown for a batch); MLX draws its own
+    # per-file bar for progress within each file.
+    file_iter: Iterable[Path] = media_files
+    if len(media_files) > 1:
+        file_iter = tqdm(media_files, desc="Files", unit="file")
+
+    failures = 0
+    with tempfile.TemporaryDirectory(prefix="whisper_clean_") as tmp:
+        tmp_dir = Path(tmp)
+        for media_path in file_iter:
+            try:
+                source = media_path
+                if do_preprocess:
+                    source = preprocess_audio(media_path, tmp_dir, audio_filter)
+                print(f"Transcribing '{media_path.name}' ...")
+                result = run_whisper(
+                    source,
+                    model_repo=model_repo,
+                    language=None if args.language == "auto" else args.language,
+                    initial_prompt=args.prompt,
+                    verbose=True if args.verbose else None,
+                )
+            except FileNotFoundError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                failures += 1
+                continue
+            except subprocess.CalledProcessError as exc:
+                stderr = exc.stderr.decode(errors="replace") if exc.stderr else ""
+                print(f"error: ffmpeg preprocessing failed for '{media_path.name}':\n{stderr}",
+                      file=sys.stderr)
+                failures += 1
+                continue
+            # Name the output after the original file, not the temp cleaned WAV.
+            out_path = output_dir / f"{media_path.stem}.txt"
+            out_path.write_text(result["text"].strip() + "\n", encoding="utf-8")
+            print(f"  -> wrote {out_path}")
+
+    print(f"\nDone. {len(media_files) - failures}/{len(media_files)} file(s) transcribed.")
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,20 +1,13 @@
-[tool.poetry]
+[project]
 name = "audio-to-text"
 version = "0.1.0"
 description = ""
-authors = ["Michael Kingston <71872141+mkingopng@users.noreply.github.com>"]
 readme = "README.md"
-
-[tool.poetry.dependencies]
-python = "^3.12"
-openai = "^1.35.9"
-python-dotenv = "^1.0.1"
-moviepy = "^1.0.3"
-pydub = "^0.25.1"
-openai-whisper = "^20231117"
-tqdm = "^4.66.4"
-
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+authors = [
+    { name = "Michael Kingston", email = "71872141+mkingopng@users.noreply.github.com" },
+]
+requires-python = ">=3.12"
+dependencies = [
+    "mlx-whisper>=0.4.3",
+    "tqdm>=4.66",
+]
