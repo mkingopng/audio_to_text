@@ -251,19 +251,17 @@ def run_whisper(
     language: str | None = "en",
     initial_prompt: str | None = None,
     verbose: bool | None = None,
+    word_timestamps: bool = True,
 ) -> dict:
     """Transcribe one audio/video file on the Apple GPU and return the result dict.
 
-    Thin seam over mlx_whisper.transcribe(). MLX caches the loaded model per repo,
-    so a batch downloads/loads the weights only once. Whisper handles arbitrarily
-    long media itself (30 s sliding window with context carried between windows)
-    and draws its own per-file progress bar while decoding.
+    word_timestamps defaults to True: word-level timing is what lets
+    align_words_to_speakers attribute speaker identity per-word instead of
+    per multi-second segment.
     """
     if not media_path.exists():
         raise FileNotFoundError(f"Input file not found: {media_path}")
 
-    # language (and any future decode options) go through mlx_whisper's
-    # **decode_options; omit it entirely to let Whisper auto-detect.
     decode_options: dict = {}
     if language is not None:
         decode_options["language"] = language
@@ -272,8 +270,14 @@ def run_whisper(
         path_or_hf_repo=model_repo,
         initial_prompt=initial_prompt,
         verbose=verbose,
+        word_timestamps=word_timestamps,
         **decode_options,
     )
+
+
+def extract_words(result: dict) -> list[dict]:
+    """Flatten a run_whisper() result's per-segment word lists into one chronological list."""
+    return [word for segment in result["segments"] for word in segment["words"]]
 
 
 def ensure_apple_silicon() -> None:

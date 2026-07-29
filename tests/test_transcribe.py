@@ -1,5 +1,6 @@
 """Unit tests for the pure speaker-attribution/grouping/rendering logic in transcribe.py."""
 from pathlib import Path
+from unittest.mock import patch
 
 from src.transcribe import align_words_to_speakers
 from src.transcribe import (
@@ -9,6 +10,7 @@ from src.transcribe import (
     render_markdown,
 )
 from src.transcribe import build_ffmpeg_args
+from src.transcribe import extract_words, run_whisper
 
 
 def test_align_words_to_speakers_assigns_by_max_overlap():
@@ -120,3 +122,42 @@ def test_build_ffmpeg_args_with_filter():
     assert "-af" in args
     assert args[args.index("-af") + 1] == "highpass=f=80,loudnorm=I=-16:TP=-1.5:LRA=11"
     assert args[-1] == "/tmp/out.wav"
+
+
+def test_run_whisper_requests_word_timestamps_by_default(tmp_path):
+    media = tmp_path / "clip.wav"
+    media.write_bytes(b"fake wav bytes")
+    fake_result = {"text": "hi", "segments": [], "language": "en"}
+
+    with patch("src.transcribe.mlx_whisper.transcribe", return_value=fake_result) as mock_transcribe:
+        result = run_whisper(media, model_repo="mlx-community/whisper-large-v3-turbo")
+
+    assert result == fake_result
+    assert mock_transcribe.call_args.kwargs["word_timestamps"] is True
+
+
+def test_run_whisper_word_timestamps_can_be_disabled(tmp_path):
+    media = tmp_path / "clip.wav"
+    media.write_bytes(b"fake wav bytes")
+
+    with patch("src.transcribe.mlx_whisper.transcribe", return_value={}) as mock_transcribe:
+        run_whisper(media, model_repo="turbo", word_timestamps=False)
+
+    assert mock_transcribe.call_args.kwargs["word_timestamps"] is False
+
+
+def test_extract_words_flattens_segments_in_order():
+    result = {
+        "segments": [
+            {"start": 0.0, "end": 1.0, "text": "Hi", "words": [
+                {"word": "Hi", "start": 0.0, "end": 0.5, "probability": 0.9},
+            ]},
+            {"start": 1.0, "end": 2.0, "text": " there", "words": [
+                {"word": " there", "start": 1.0, "end": 1.5, "probability": 0.8},
+            ]},
+        ],
+    }
+
+    words = extract_words(result)
+
+    assert [w["word"] for w in words] == ["Hi", " there"]
