@@ -27,6 +27,7 @@ normalization), and add --denoise for an extra FFT noise-reduction pass:
 from __future__ import annotations
 
 import argparse
+import os
 import platform
 import shutil
 import subprocess
@@ -37,6 +38,7 @@ from pathlib import Path
 
 import mlx_whisper
 import numpy as np
+from dotenv import load_dotenv
 from tqdm import tqdm
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -406,6 +408,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Also stream each segment to the console as it is decoded.",
     )
+    parser.add_argument(
+        "--num-speakers",
+        type=int,
+        default=None,
+        help="Exact speaker count for diarization, if known (improves clustering accuracy). "
+             "Default: auto-detect.",
+    )
     args = parser.parse_args(argv)
 
     ensure_apple_silicon()
@@ -419,6 +428,9 @@ def main(argv: list[str] | None = None) -> int:
     do_preprocess = args.preprocess or args.denoise or args.audio_filter is not None
     audio_filter = args.audio_filter or (build_audio_filter(args.denoise) if do_preprocess else None)
     model_repo = resolve_model_repo(args.model)
+
+    load_dotenv()
+    diarization_pipeline = load_diarization_pipeline(os.environ.get("HF_TOKEN"))
 
     output_dir = (args.output_dir or DEFAULT_OUTPUT_DIR).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -447,6 +459,12 @@ def main(argv: list[str] | None = None) -> int:
                     initial_prompt=args.prompt,
                     verbose=True if args.verbose else None,
                 )
+                print(f"Diarizing '{media_path.name}' ...")
+                turns, _embeddings = run_diarization(
+                    source, diarization_pipeline, num_speakers=args.num_speakers
+                )
+                aligned_words = align_words_to_speakers(extract_words(result), turns)
+                speaker_turns = group_into_turns(aligned_words)
             except FileNotFoundError as exc:
                 print(f"error: {exc}", file=sys.stderr)
                 failures += 1
@@ -458,8 +476,8 @@ def main(argv: list[str] | None = None) -> int:
                 failures += 1
                 continue
             # Name the output after the original file, not the temp cleaned WAV.
-            out_path = output_dir / f"{media_path.stem}.txt"
-            out_path.write_text(result["text"].strip() + "\n", encoding="utf-8")
+            out_path = output_dir / f"{media_path.stem}.md"
+            out_path.write_text(render_markdown(speaker_turns), encoding="utf-8")
             print(f"  -> wrote {out_path}")
 
     print(f"\nDone. {len(media_files) - failures}/{len(media_files)} file(s) transcribed.")
