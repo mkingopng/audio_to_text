@@ -96,27 +96,32 @@ def build_audio_filter(denoise: bool) -> str:
     return ",".join(parts)
 
 
-def preprocess_audio(media_path: Path, tmp_dir: Path, audio_filter: str) -> Path:
-    """Clean an audio/video file with ffmpeg into a 16 kHz mono WAV for Whisper.
+def build_ffmpeg_args(media_path: Path, cleaned_path: Path, audio_filter: str | None) -> list[str]:
+    """Build the ffmpeg argv that extracts media_path to a 16kHz mono WAV.
 
-    Returns the path to the cleaned WAV inside ``tmp_dir``. Whisper resamples to
-    16 kHz mono anyway, so emitting that here costs nothing and lets ffmpeg do the
-    filtering in one pass.
+    audio_filter is applied via -af only when given; extraction to 16kHz mono
+    happens unconditionally either way (both run_whisper and run_diarization
+    need the same WAV on the same time base).
+    """
+    args = ["ffmpeg", "-nostdin", "-y", "-i", str(media_path)]
+    if audio_filter:
+        args += ["-af", audio_filter]
+    args += ["-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", str(cleaned_path)]
+    return args
+
+
+def preprocess_audio(media_path: Path, tmp_dir: Path, audio_filter: str | None) -> Path:
+    """Extract media_path to a 16 kHz mono WAV inside tmp_dir, for Whisper and diarization alike.
+
+    Returns the path to the WAV. Whisper resamples to 16 kHz mono anyway, so
+    emitting that here costs nothing and lets ffmpeg do any requested filtering
+    in the same pass.
     """
     if shutil.which("ffmpeg") is None:
-        raise FileNotFoundError("ffmpeg not found on PATH; cannot preprocess audio.")
+        raise FileNotFoundError("ffmpeg not found on PATH; cannot extract audio.")
 
     cleaned = tmp_dir / (media_path.stem + ".clean.wav")
-    subprocess.run(
-        [
-            "ffmpeg", "-nostdin", "-y", "-i", str(media_path),
-            "-af", audio_filter,
-            "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
-            str(cleaned),
-        ],
-        check=True,
-        capture_output=True,
-    )
+    subprocess.run(build_ffmpeg_args(media_path, cleaned, audio_filter), check=True, capture_output=True)
     return cleaned
 
 
@@ -346,7 +351,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     do_preprocess = args.preprocess or args.denoise or args.audio_filter is not None
-    audio_filter = args.audio_filter or build_audio_filter(args.denoise)
+    audio_filter = args.audio_filter or (build_audio_filter(args.denoise) if do_preprocess else None)
     model_repo = resolve_model_repo(args.model)
 
     output_dir = (args.output_dir or DEFAULT_OUTPUT_DIR).resolve()
@@ -367,9 +372,7 @@ def main(argv: list[str] | None = None) -> int:
         tmp_dir = Path(tmp)
         for media_path in file_iter:
             try:
-                source = media_path
-                if do_preprocess:
-                    source = preprocess_audio(media_path, tmp_dir, audio_filter)
+                source = preprocess_audio(media_path, tmp_dir, audio_filter)
                 print(f"Transcribing '{media_path.name}' ...")
                 result = run_whisper(
                     source,

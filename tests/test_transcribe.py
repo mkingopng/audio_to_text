@@ -1,4 +1,6 @@
 """Unit tests for the pure speaker-attribution/grouping/rendering logic in transcribe.py."""
+from pathlib import Path
+
 from src.transcribe import align_words_to_speakers
 from src.transcribe import (
     _group_consecutive,
@@ -6,6 +8,7 @@ from src.transcribe import (
     relabel_speakers,
     render_markdown,
 )
+from src.transcribe import build_ffmpeg_args
 
 
 def test_align_words_to_speakers_assigns_by_max_overlap():
@@ -100,3 +103,20 @@ def test_render_markdown_formats_heading_and_timestamp():
     assert "## Person 1 — 00:03\n\nGuidelines, but here you can see.\n" in markdown
     assert "## Person 3 — 01:42\n\nYep, we have both choices.\n" in markdown
     assert "## Person 1 — 01:02:05\n\nBack again.\n" in markdown
+
+
+def test_build_ffmpeg_args_without_filter():
+    args = build_ffmpeg_args(Path("in.mp4"), Path("/tmp/out.wav"), None)
+
+    assert args == [
+        "ffmpeg", "-nostdin", "-y", "-i", "in.mp4",
+        "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", "/tmp/out.wav",
+    ]
+
+
+def test_build_ffmpeg_args_with_filter():
+    args = build_ffmpeg_args(Path("in.m4a"), Path("/tmp/out.wav"), "highpass=f=80,loudnorm=I=-16:TP=-1.5:LRA=11")
+
+    assert "-af" in args
+    assert args[args.index("-af") + 1] == "highpass=f=80,loudnorm=I=-16:TP=-1.5:LRA=11"
+    assert args[-1] == "/tmp/out.wav"
