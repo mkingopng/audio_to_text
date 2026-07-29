@@ -156,6 +156,89 @@ def align_words_to_speakers(words: list[dict], turns: list[dict]) -> list[dict]:
     return aligned
 
 
+def _join_words(words: list[str]) -> str:
+    """Whisper word strings already carry leading spaces/punctuation; join without adding more."""
+    return "".join(words).strip()
+
+
+def _group_consecutive(aligned_words: list[dict]) -> list[dict]:
+    """Merge consecutive same-speaker words into turns, keeping original speaker ids.
+
+    Returned turns are NOT relabeled to "Person N" -- fusion (Task 10) needs the
+    original diarization ids to merge two sources before a single final relabel.
+    """
+    if not aligned_words:
+        return []
+
+    turns: list[dict] = []
+    current_speaker = aligned_words[0]["speaker"]
+    current_words: list[str] = []
+    current_probs: list[float] = []
+    current_start = aligned_words[0]["start"]
+    current_end = current_start
+
+    def _flush() -> None:
+        turns.append({
+            "speaker": current_speaker,
+            "start": current_start,
+            "end": current_end,
+            "text": _join_words(current_words),
+            "confidence": sum(current_probs) / len(current_probs),
+        })
+
+    for word in aligned_words:
+        if word["speaker"] != current_speaker:
+            _flush()
+            current_speaker = word["speaker"]
+            current_words = []
+            current_probs = []
+            current_start = word["start"]
+        current_words.append(word["word"])
+        current_probs.append(word["probability"])
+        current_end = word["end"]
+    _flush()
+    return turns
+
+
+def relabel_speakers(turns: list[dict]) -> list[dict]:
+    """Rename each turn's speaker id to "Person N" by first-appearance order.
+
+    A speaker id that recurs later in the list keeps the number it was first
+    assigned -- speaker identity must not drift/renumber partway through.
+    """
+    labels: dict[str, str] = {}
+
+    def _label_for(speaker_id: str) -> str:
+        if speaker_id not in labels:
+            labels[speaker_id] = f"Person {len(labels) + 1}"
+        return labels[speaker_id]
+
+    return [{**turn, "speaker": _label_for(turn["speaker"])} for turn in turns]
+
+
+def group_into_turns(aligned_words: list[dict]) -> list[dict]:
+    """Single-file convenience entry point: group, then relabel to Person N."""
+    return relabel_speakers(_group_consecutive(aligned_words))
+
+
+def _format_timestamp(seconds: float) -> str:
+    total = int(seconds)
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def render_markdown(turns: list[dict]) -> str:
+    """Render relabeled turns (speaker == "Person N") as heading-per-turn Markdown."""
+    blocks = [
+        f"## {turn['speaker']} — {_format_timestamp(turn['start'])}\n\n{turn['text']}\n"
+        for turn in turns
+    ]
+    return "\n".join(blocks).rstrip() + "\n"
+
+
 def run_whisper(
     media_path: Path,
     *,
