@@ -52,8 +52,8 @@ not embed MLX specifics.
   and returns its result dict (`{"text", "segments", "language", ...}`).
   `mlx_whisper` caches the loaded model per repo, so a batch loads weights once.
 - A `--model` friendly-name → HF-repo map, with pass-through for full repo ids:
-  - `large-v3`        → `mlx-community/whisper-large-v3-mlx`   (default)
-  - `turbo` / `large-v3-turbo` → `mlx-community/whisper-large-v3-turbo`
+  - `turbo` / `large-v3-turbo` → `mlx-community/whisper-large-v3-turbo`  (default — see §14)
+  - `large-v3`        → `mlx-community/whisper-large-v3-mlx`
   - any string containing `/` → used verbatim as an HF repo id.
 
 Unchanged units: `gather_media()`, `build_audio_filter()`, `preprocess_audio()`,
@@ -91,10 +91,16 @@ out_path.write_text(result["text"].strip() + "\n", encoding="utf-8")
 
 `pyproject.toml`:
 - **Add** `mlx-whisper`.
-- **Remove** `openai-whisper` (drops the `torch` stack — large install shrink).
+- **Remove** `openai-whisper`.
 - **Keep** `tqdm` (direct import for the batch bar).
 
 `ffmpeg` (system) still required — unchanged.
+
+> **Correction (verified during implementation):** removing `openai-whisper` does
+> **not** shed the `torch` stack — `mlx-whisper` 0.4.3 itself depends on `torch`
+> (`torch → mlx-whisper → audio-to-text`). The venv stays ~930 MB. The GPU
+> speedup (the primary goal) is unaffected; the install-shrink benefit does not
+> materialize. `openai-whisper` is still removed as it is now unused.
 
 ## 9. Error handling
 
@@ -146,3 +152,24 @@ Acceptance:
   `--format all` run.
 - Keep the `large-v3` CPU `.txt` as the accuracy baseline until MLX parity is
   confirmed, then it is simply overwritten by a normal run.
+
+## 14. Benchmark results & revised default (measured during implementation)
+
+Measured on the M4 (10 cores) against the real 38m41s recording:
+
+| Config | Wall-clock | ~×realtime | Quality |
+|--------|-----------:|:----------:|---------|
+| **turbo · GPU (MLX)** | **~3.25 min** (incl. 1st-run download; ~2.3 min warm) | ~15× | near-parity (6410 words) |
+| large-v3 · GPU (MLX) | ~13.5 min | ~2.9× | best (6367 words) |
+| large-v3 · CPU (openai-whisper, pre-migration) | ~8 min | ~4.8× | best (6704 words) |
+
+**Key finding:** `large-v3` on the GPU is **slower than `large-v3` on CPU** — Whisper's
+autoregressive decoder is latency-bound, and MLX's per-token overhead on the large
+32-layer decoder does not beat PyTorch's optimized CPU path on this fast 10-core M4.
+The GPU only pays off with **turbo** (4-layer decoder), which is ~4× faster than
+large-v3-GPU and ~3× faster than the CPU baseline at essentially equal quality.
+
+**Revised decision:** default model changed from `large-v3` to **`turbo`** — it is the
+only configuration that satisfies the project goal (use the GPU to go *faster*).
+`large-v3` remains available via `--model large-v3` for one-off max-accuracy runs;
+note that for `large-v3` specifically, the CPU path was actually faster.
