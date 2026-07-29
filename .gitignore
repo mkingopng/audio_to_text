@@ -248,3 +248,6 @@ poetry.lock
 
 # JetBrains IDE (whole-folder ignore for this solo project).
 .idea/
+
+# Subagent-driven-development scratch workspace (ledgers, briefs, review packages).
+.superpowers/
