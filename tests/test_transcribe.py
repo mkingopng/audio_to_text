@@ -1,4 +1,5 @@
 """Unit tests for the pure speaker-attribution/grouping/rendering logic in transcribe.py."""
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -266,3 +267,48 @@ def test_main_continues_batch_after_diarization_failure(tmp_path, capsys):
     assert not (tmp_path / "fake1.md").exists()
     assert (tmp_path / "fake2.md").exists()
     assert "error: diarization failed for 'fake1.m4a'" in capsys.readouterr().err
+
+
+def test_main_fuse_reports_clean_error_on_missing_file(tmp_path, capsys):
+    """--fuse must fail cleanly (no raw traceback) if a source file is missing.
+
+    Unlike the batch loop, --fuse processes exactly one fusion attempt per
+    invocation, so there's no "skip and continue" here -- just a clean
+    'error: ...' message on stderr and a non-zero exit code.
+    """
+    import src.transcribe as t
+
+    with patch.object(t, "ensure_apple_silicon"), \
+         patch.object(t, "gather_media", return_value=[Path("primary.m4a")]), \
+         patch.object(t, "load_dotenv"), \
+         patch.object(t, "load_diarization_pipeline", return_value=object()), \
+         patch("src.fusion.run_fusion", side_effect=FileNotFoundError("no such file: 'secondary.m4a'")):
+        exit_code = t.main([
+            "primary.m4a", "--fuse", "secondary.m4a", "--output-dir", str(tmp_path),
+        ])
+
+    assert exit_code == 1
+    assert "error: no such file: 'secondary.m4a'" in capsys.readouterr().err
+
+
+def test_main_fuse_reports_clean_error_on_ffmpeg_failure(tmp_path, capsys):
+    """--fuse must fail cleanly if ffmpeg preprocessing fails for either source."""
+    import src.transcribe as t
+
+    ffmpeg_error = subprocess.CalledProcessError(
+        returncode=1, cmd=["ffmpeg"], stderr=b"invalid data found when processing input"
+    )
+
+    with patch.object(t, "ensure_apple_silicon"), \
+         patch.object(t, "gather_media", return_value=[Path("primary.m4a")]), \
+         patch.object(t, "load_dotenv"), \
+         patch.object(t, "load_diarization_pipeline", return_value=object()), \
+         patch("src.fusion.run_fusion", side_effect=ffmpeg_error):
+        exit_code = t.main([
+            "primary.m4a", "--fuse", "secondary.m4a", "--output-dir", str(tmp_path),
+        ])
+
+    assert exit_code == 1
+    err = capsys.readouterr().err
+    assert "error: ffmpeg preprocessing failed" in err
+    assert "invalid data found when processing input" in err

@@ -453,16 +453,24 @@ def main(argv: list[str] | None = None) -> int:
         diarization_pipeline = load_diarization_pipeline(os.environ.get("HF_TOKEN"))
         output_dir = (args.output_dir or DEFAULT_OUTPUT_DIR).resolve()
         from src.fusion import run_fusion
-        out_path = run_fusion(
-            args.media,
-            args.fuse,
-            model_repo=resolve_model_repo(args.model),
-            language=None if args.language == "auto" else args.language,
-            initial_prompt=args.prompt,
-            num_speakers=args.num_speakers,
-            output_dir=output_dir,
-            diarization_pipeline=diarization_pipeline,
-        )
+        try:
+            out_path = run_fusion(
+                args.media,
+                args.fuse,
+                model_repo=resolve_model_repo(args.model),
+                language=None if args.language == "auto" else args.language,
+                initial_prompt=args.prompt,
+                num_speakers=args.num_speakers,
+                output_dir=output_dir,
+                diarization_pipeline=diarization_pipeline,
+            )
+        except FileNotFoundError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        except subprocess.CalledProcessError as exc:
+            stderr = exc.stderr.decode(errors="replace") if exc.stderr else ""
+            print(f"error: ffmpeg preprocessing failed:\n{stderr}", file=sys.stderr)
+            return 1
         print(f"Fused transcript written to {out_path}")
         return 0
 
