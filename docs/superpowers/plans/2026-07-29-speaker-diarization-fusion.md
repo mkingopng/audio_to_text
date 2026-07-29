@@ -17,6 +17,7 @@
 - `word_timestamps=True` is the default for `run_whisper` — this is the fix for segment-boundary speaker misattribution; do not silently regress it to `False`.
 - No automated ground truth exists for speaker-attribution correctness (the docx transcript only labels one speaker). Real-file validation steps in this plan are manual/by-ear, not automated assertions — do not fabricate a pass/fail test for something that requires human judgment.
 - `HF_TOKEN` is already present in the gitignored `.env` at the project root — never print its value or commit it.
+- `pyannote.audio` resolved (Task 1) to `4.0.7`, not the `3.x` line the model card examples are written against: `Pipeline.from_pretrained(...)` takes `token=`, not `use_auth_token=` (renamed upstream). Already corrected throughout this plan.
 - Word dicts from `mlx_whisper` (when `word_timestamps=True`) have exactly these keys: `"word"` (str, includes leading punctuation/whitespace per Whisper's tokenizer — join words with `"".join(...)`, not `" ".join(...)`), `"start"` (float), `"end"` (float), `"probability"` (float). Confirmed by reading the installed `mlx_whisper` 0.4.x source (`timing.py`/`transcribe.py`).
 
 ---
@@ -75,7 +76,7 @@ from dotenv import load_dotenv
 import os
 load_dotenv()
 from pyannote.audio import Pipeline
-p = Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', use_auth_token=os.environ['HF_TOKEN'])
+p = Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', token=os.environ['HF_TOKEN'])
 print(type(p))
 "
 ```
@@ -90,7 +91,7 @@ from dotenv import load_dotenv
 import os
 load_dotenv()
 from pyannote.audio import Pipeline
-p = Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', use_auth_token=os.environ['HF_TOKEN'])
+p = Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', token=os.environ['HF_TOKEN'])
 diarization, embeddings = p('data/Tag5_29_July_2026_10903_pm.m4a', num_speakers=6, return_embeddings=True)
 labels = sorted(diarization.labels())
 print('labels:', labels)
@@ -770,7 +771,7 @@ def load_diarization_pipeline(hf_token: str | None):
             "section 8) for details."
         )
     try:
-        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=hf_token)
+        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", token=hf_token)
     except Exception as exc:
         raise RuntimeError(
             "Failed to load the pyannote diarization pipeline. This usually means either "
