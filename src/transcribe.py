@@ -36,6 +36,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 import mlx_whisper
+import numpy as np
 from tqdm import tqdm
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -278,6 +279,67 @@ def run_whisper(
 def extract_words(result: dict) -> list[dict]:
     """Flatten a run_whisper() result's per-segment word lists into one chronological list."""
     return [word for segment in result["segments"] for word in segment["words"]]
+
+
+def load_diarization_pipeline(hf_token: str | None):
+    """Load the pretrained pyannote diarization pipeline, preferring the Apple GPU (MPS)."""
+    if not hf_token:
+        raise RuntimeError(
+            "HF_TOKEN is not set. Add it to the project's .env file (HF_TOKEN=...) and "
+            "make sure you've accepted the pyannote/speaker-diarization-3.1 model terms "
+            "at https://huggingface.co/pyannote/speaker-diarization-3.1 -- see the design "
+            "spec (docs/superpowers/specs/2026-07-29-speaker-diarization-fusion-design.md, "
+            "section 8) for details."
+        )
+    from pyannote.audio import Pipeline
+    try:
+        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", token=hf_token)
+    except Exception as exc:
+        raise RuntimeError(
+            "Failed to load the pyannote diarization pipeline. This usually means either "
+            "HF_TOKEN is invalid/expired, or the pyannote/speaker-diarization-3.1 model "
+            "terms haven't been accepted yet at "
+            "https://huggingface.co/pyannote/speaker-diarization-3.1. "
+            f"Underlying error: {exc}"
+        ) from exc
+    try:
+        import torch
+        pipeline.to(torch.device("mps"))
+    except Exception:
+        print("warning: could not move diarization pipeline to MPS; falling back to CPU", file=sys.stderr)
+    return pipeline
+
+
+def run_diarization(
+    wav_path: Path, pipeline, *, num_speakers: int | None = None
+) -> tuple[list[dict], dict[str, np.ndarray]]:
+    """Run a (possibly fake, for testing) pyannote-style pipeline and parse its output.
+
+    Returns (turns, embeddings): turns sorted by start; embeddings keyed by
+    speaker id, one row per sorted(diarization.labels()).
+    """
+    kwargs: dict = {"return_embeddings": True}
+    if num_speakers is not None:
+        kwargs["num_speakers"] = num_speakers
+    diarization, embeddings_array = pipeline(str(wav_path), **kwargs)
+
+    turns = [
+        {"start": float(turn.start), "end": float(turn.end), "speaker": speaker}
+        for turn, _, speaker in diarization.itertracks(yield_label=True)
+    ]
+    turns.sort(key=lambda t: t["start"])
+
+    speaker_labels = sorted(diarization.labels())
+    embeddings = {label: embeddings_array[i] for i, label in enumerate(speaker_labels)}
+
+    if num_speakers is not None and len(speaker_labels) != num_speakers:
+        print(
+            f"warning: requested num_speakers={num_speakers} but diarization found "
+            f"{len(speaker_labels)} speaker(s) in '{wav_path.name}'",
+            file=sys.stderr,
+        )
+
+    return turns, embeddings
 
 
 def ensure_apple_silicon() -> None:

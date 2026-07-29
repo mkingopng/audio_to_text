@@ -161,3 +161,68 @@ def test_extract_words_flattens_segments_in_order():
     words = extract_words(result)
 
     assert [w["word"] for w in words] == ["Hi", " there"]
+
+
+import numpy as np
+import pytest
+
+from src.transcribe import load_diarization_pipeline, run_diarization
+
+
+class _FakeTurn:
+    def __init__(self, start, end):
+        self.start = start
+        self.end = end
+
+
+class _FakeDiarization:
+    def __init__(self, tracks):
+        self._tracks = tracks  # list of (start, end, label)
+
+    def itertracks(self, yield_label=True):
+        for start, end, label in self._tracks:
+            yield _FakeTurn(start, end), None, label
+
+    def labels(self):
+        return sorted({label for _, _, label in self._tracks})
+
+
+def test_run_diarization_parses_pipeline_output_sorted_by_start():
+    tracks = [(5.0, 9.0, "SPEAKER_00"), (0.0, 5.0, "SPEAKER_01")]
+    embeddings_array = np.array([[1.0, 0.0], [0.0, 1.0]])  # row 0 -> SPEAKER_00, row 1 -> SPEAKER_01 (sorted order)
+
+    def fake_pipeline(path, **kwargs):
+        assert kwargs == {"return_embeddings": True, "num_speakers": 2}
+        return _FakeDiarization(tracks), embeddings_array
+
+    turns, embeddings = run_diarization(Path("fake.wav"), fake_pipeline, num_speakers=2)
+
+    assert turns == [
+        {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_01"},
+        {"start": 5.0, "end": 9.0, "speaker": "SPEAKER_00"},
+    ]
+    assert set(embeddings.keys()) == {"SPEAKER_00", "SPEAKER_01"}
+    assert np.array_equal(embeddings["SPEAKER_00"], np.array([1.0, 0.0]))
+    assert np.array_equal(embeddings["SPEAKER_01"], np.array([0.0, 1.0]))
+
+
+def test_run_diarization_omits_num_speakers_when_not_given():
+    def fake_pipeline(path, **kwargs):
+        assert kwargs == {"return_embeddings": True}
+        return _FakeDiarization([(0.0, 1.0, "SPEAKER_00")]), np.array([[1.0]])
+
+    run_diarization(Path("fake.wav"), fake_pipeline, num_speakers=None)
+
+
+def test_run_diarization_warns_on_speaker_count_mismatch(capsys):
+    def fake_pipeline(path, **kwargs):
+        return _FakeDiarization([(0.0, 1.0, "SPEAKER_00")]), np.array([[1.0]])
+
+    run_diarization(Path("fake.wav"), fake_pipeline, num_speakers=6)
+
+    assert "warning" in capsys.readouterr().err.lower()
+
+
+def test_load_diarization_pipeline_raises_clear_error_without_token():
+    with pytest.raises(RuntimeError, match="HF_TOKEN"):
+        load_diarization_pipeline(None)
