@@ -120,6 +120,42 @@ def preprocess_audio(media_path: Path, tmp_dir: Path, audio_filter: str) -> Path
     return cleaned
 
 
+def overlap_seconds(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
+    """Seconds of overlap between two [start, end) intervals (0.0 if disjoint).
+
+    Public (not underscore-prefixed): fusion.py's merge_turns (Task 10) imports
+    this directly rather than duplicating the same interval-overlap logic.
+    """
+    return max(0.0, min(a_end, b_end) - max(a_start, b_start))
+
+
+def align_words_to_speakers(words: list[dict], turns: list[dict]) -> list[dict]:
+    """Assign each word to the diarization turn it overlaps most.
+
+    Attribution happens per word (not per multi-second Whisper segment) so a
+    speaker change mid-segment only misattributes the words actually on the
+    wrong side of the change, not the whole segment.
+    """
+    if not turns:
+        raise ValueError("align_words_to_speakers: no diarization turns to align against")
+
+    aligned = []
+    for word in words:
+        best_turn = max(
+            turns,
+            key=lambda t: overlap_seconds(word["start"], word["end"], t["start"], t["end"]),
+        )
+        if overlap_seconds(word["start"], word["end"], best_turn["start"], best_turn["end"]) <= 0.0:
+            # word falls in a silent gap between turns; attribute to whichever
+            # turn boundary is closest in time.
+            best_turn = min(
+                turns,
+                key=lambda t: min(abs(word["start"] - t["end"]), abs(t["start"] - word["end"])),
+            )
+        aligned.append({**word, "speaker": best_turn["speaker"]})
+    return aligned
+
+
 def run_whisper(
     media_path: Path,
     *,
