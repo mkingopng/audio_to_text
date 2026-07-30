@@ -100,6 +100,25 @@ def test_shift_and_remap_applies_offset_and_speaker_map():
     assert result == [{"speaker": "SPEAKER_01", "start": 11.0, "end": 12.0, "text": "hi", "confidence": 0.5}]
 
 
+def test_shift_and_remap_drops_turns_entirely_before_zero_and_clips_straddling_turn():
+    """A negative offset (B's recording started before A's) means some of B's early
+    turns predate A's timeline zero and have no valid position on the merged
+    timeline. A turn ending before zero must be dropped entirely; one straddling
+    zero must be clipped to start at 0, not shifted to a negative timestamp."""
+    turns = [
+        {"speaker": "SPEAKER_00", "start": 0.0, "end": 3.0, "text": "before the call started", "confidence": 0.5},
+        {"speaker": "SPEAKER_00", "start": 4.0, "end": 6.0, "text": "straddles zero", "confidence": 0.5},
+        {"speaker": "SPEAKER_00", "start": 10.0, "end": 12.0, "text": "well after zero", "confidence": 0.5},
+    ]
+
+    result = _shift_and_remap(turns, offset=-5.0, speaker_map={"SPEAKER_00": "SPEAKER_01"})
+
+    assert result == [
+        {"speaker": "SPEAKER_01", "start": 0.0, "end": 1.0, "text": "straddles zero", "confidence": 0.5},
+        {"speaker": "SPEAKER_01", "start": 5.0, "end": 7.0, "text": "well after zero", "confidence": 0.5},
+    ]
+
+
 def test_merge_turns_prefers_higher_confidence_source_and_appends_gaps():
     turns_a = [
         {"speaker": "A0", "start": 0.0, "end": 5.0, "text": "hello from a", "confidence": 0.5},
@@ -142,3 +161,58 @@ def test_merge_turns_does_not_duplicate_a_b_turn_spanning_two_a_turns():
 
     a0_texts = [t["text"] for t in merged if t["speaker"] == "A0"]
     assert a0_texts == ["one continuous phone turn", "a turn two"]
+
+
+def test_merge_turns_appends_b_turn_overlapping_a_different_speakers_a_turn():
+    """A B turn that overlaps in TIME with a different speaker's A turn (e.g. one
+    mic caught cross-talk the other missed entirely) is not a replacement
+    candidate (speaker mismatch) but must still be appended as new content --
+    not silently dropped just because some other speaker's A turn occupies
+    that time range."""
+    turns_a = [
+        {"speaker": "A0", "start": 0.0, "end": 5.0, "text": "a says this", "confidence": 0.9},
+    ]
+    turns_b_shifted = [
+        {"speaker": "A1", "start": 1.0, "end": 4.0, "text": "only b's mic caught this", "confidence": 0.95},
+    ]
+
+    merged = merge_turns(turns_a, turns_b_shifted)
+
+    assert merged == [
+        {"speaker": "A0", "start": 0.0, "end": 5.0, "text": "a says this", "confidence": 0.9},
+        {"speaker": "A1", "start": 1.0, "end": 4.0, "text": "only b's mic caught this", "confidence": 0.95},
+    ]
+
+
+def test_run_fusion_uses_separate_tmp_dirs_for_each_source(tmp_path, monkeypatch):
+    """Regression: two sources sharing a filename stem (e.g. two recordings each
+    named "meeting", one .mp4 and one .m4a, or two files from different folders
+    that happen to share a name) must not collide. preprocess_audio names its
+    output after the stem alone, so if both sources were preprocessed into the
+    same shared tmp_dir, the second ffmpeg run would silently overwrite the
+    first's WAV -- corrupting find_offset into comparing a file against itself
+    and returning a plausible-looking but meaningless 0.0 offset."""
+    from src import fusion
+
+    seen_dirs = []
+
+    def fake_process_source(media_path, tmp_dir, **kwargs):
+        seen_dirs.append(tmp_dir)
+        wav_path = tmp_dir / (media_path.stem + ".clean.wav")
+        wav_path.write_bytes(b"")
+        speaker = "SPEAKER_00"
+        turns = [{"speaker": speaker, "start": 0.0, "end": 1.0, "text": "hi", "confidence": 0.9}]
+        return wav_path, turns, {speaker: np.array([1.0, 0.0])}
+
+    monkeypatch.setattr(fusion, "_process_source", fake_process_source)
+    monkeypatch.setattr(fusion, "find_offset", lambda wav_a, wav_b: 0.0)
+
+    out_path = fusion.run_fusion(
+        tmp_path / "meeting.mp4", tmp_path / "meeting.m4a",
+        model_repo="x", language="en", initial_prompt=None, num_speakers=None,
+        output_dir=tmp_path / "out", diarization_pipeline=object(),
+    )
+
+    assert len(seen_dirs) == 2
+    assert seen_dirs[0] != seen_dirs[1]
+    assert out_path.exists()

@@ -108,6 +108,17 @@ def test_render_markdown_formats_heading_and_timestamp():
     assert "## Person 1 — 01:02:05\n\nBack again.\n" in markdown
 
 
+def test_render_markdown_clamps_negative_timestamp_to_zero():
+    """_shift_and_remap (src/fusion.py) clips negative starts to 0.0, but this is a
+    defensive belt-and-braces check: negative seconds must never render as the
+    divmod-garbage hh:mm:ss a naive negative int() would produce (e.g. -1:59:59)."""
+    turns = [{"speaker": "Person 1", "start": -2.5, "text": "should clamp to zero"}]
+
+    markdown = render_markdown(turns)
+
+    assert "## Person 1 — 00:00\n\nshould clamp to zero\n" in markdown
+
+
 def test_build_ffmpeg_args_without_filter():
     args = build_ffmpeg_args(Path("in.mp4"), Path("/tmp/out.wav"), None)
 
@@ -278,46 +289,177 @@ def test_main_continues_batch_after_diarization_failure(tmp_path, capsys):
     assert "error: diarization failed for 'fake1.m4a'" in capsys.readouterr().err
 
 
-def test_main_fuse_reports_clean_error_on_missing_file(tmp_path, capsys):
-    """--fuse must fail cleanly (no raw traceback) if a source file is missing.
-
-    Unlike the batch loop, --fuse processes exactly one fusion attempt per
-    invocation, so there's no "skip and continue" here -- just a clean
-    'error: ...' message on stderr and a non-zero exit code.
-    """
+def test_main_fuse_reports_clean_error_on_missing_media_file(tmp_path, capsys):
+    """--fuse must fail cleanly, before running any pipeline, if the primary media
+    file doesn't exist. This is a real (unmocked) pre-flight check -- run_fusion
+    is never reached, so there's nothing to mock."""
     import src.transcribe as t
 
+    missing_primary = tmp_path / "primary.m4a"  # deliberately not created
+    secondary = tmp_path / "secondary.m4a"
+    secondary.touch()
+
     with patch.object(t, "ensure_apple_silicon"), \
-         patch.object(t, "gather_media", return_value=[Path("primary.m4a")]), \
-         patch.object(t, "load_dotenv"), \
-         patch.object(t, "load_diarization_pipeline", return_value=object()), \
-         patch("src.fusion.run_fusion", side_effect=FileNotFoundError("no such file: 'secondary.m4a'")):
+         patch.object(t, "gather_media", return_value=[missing_primary]):
         exit_code = t.main([
-            "primary.m4a", "--fuse", "secondary.m4a", "--output-dir", str(tmp_path),
+            str(missing_primary), "--fuse", str(secondary), "--output-dir", str(tmp_path),
         ])
 
     assert exit_code == 1
-    assert "error: no such file: 'secondary.m4a'" in capsys.readouterr().err
+    assert f"error: no such file: '{missing_primary}'" in capsys.readouterr().err
+
+
+def test_main_fuse_reports_clean_error_on_missing_fuse_file(tmp_path, capsys):
+    """Same pre-flight existence check, for the secondary (--fuse) file."""
+    import src.transcribe as t
+
+    primary = tmp_path / "primary.m4a"
+    primary.touch()
+    missing_secondary = tmp_path / "secondary.m4a"  # deliberately not created
+
+    with patch.object(t, "ensure_apple_silicon"), \
+         patch.object(t, "gather_media", return_value=[primary]):
+        exit_code = t.main([
+            str(primary), "--fuse", str(missing_secondary), "--output-dir", str(tmp_path),
+        ])
+
+    assert exit_code == 1
+    assert f"error: no such file: '{missing_secondary}'" in capsys.readouterr().err
+
+
+def test_main_fuse_reports_clean_error_when_ffmpeg_missing(tmp_path, capsys):
+    """--fuse must fail cleanly if ffmpeg itself isn't on PATH (the actual scenario
+    that produces a FileNotFoundError from run_fusion/preprocess_audio -- a plain
+    missing source file is caught earlier by the pre-flight existence check above,
+    before run_fusion is ever called)."""
+    import src.transcribe as t
+
+    primary = tmp_path / "primary.m4a"
+    primary.touch()
+    secondary = tmp_path / "secondary.m4a"
+    secondary.touch()
+
+    with patch.object(t, "ensure_apple_silicon"), \
+         patch.object(t, "gather_media", return_value=[primary]), \
+         patch.object(t, "load_dotenv"), \
+         patch.object(t, "load_diarization_pipeline", return_value=object()), \
+         patch("src.fusion.run_fusion",
+               side_effect=FileNotFoundError("ffmpeg not found on PATH; cannot extract audio.")):
+        exit_code = t.main([
+            str(primary), "--fuse", str(secondary), "--output-dir", str(tmp_path),
+        ])
+
+    assert exit_code == 1
+    assert "error: ffmpeg not found on PATH" in capsys.readouterr().err
 
 
 def test_main_fuse_reports_clean_error_on_ffmpeg_failure(tmp_path, capsys):
     """--fuse must fail cleanly if ffmpeg preprocessing fails for either source."""
     import src.transcribe as t
 
+    primary = tmp_path / "primary.m4a"
+    primary.touch()
+    secondary = tmp_path / "secondary.m4a"
+    secondary.touch()
+
     ffmpeg_error = subprocess.CalledProcessError(
         returncode=1, cmd=["ffmpeg"], stderr=b"invalid data found when processing input"
     )
 
     with patch.object(t, "ensure_apple_silicon"), \
-         patch.object(t, "gather_media", return_value=[Path("primary.m4a")]), \
+         patch.object(t, "gather_media", return_value=[primary]), \
          patch.object(t, "load_dotenv"), \
          patch.object(t, "load_diarization_pipeline", return_value=object()), \
          patch("src.fusion.run_fusion", side_effect=ffmpeg_error):
         exit_code = t.main([
-            "primary.m4a", "--fuse", "secondary.m4a", "--output-dir", str(tmp_path),
+            str(primary), "--fuse", str(secondary), "--output-dir", str(tmp_path),
         ])
 
     assert exit_code == 1
     err = capsys.readouterr().err
     assert "error: ffmpeg preprocessing failed" in err
     assert "invalid data found when processing input" in err
+
+
+def test_main_fuse_reports_clean_error_on_speaker_count_mismatch(tmp_path, capsys):
+    """match_speakers raises ValueError when the two sources' detected speaker
+    counts differ -- a real, expected outcome (not a corner case) when running
+    without --num-speakers. Before this fix this reached main() as an unhandled
+    traceback after both sources' full ASR + diarization passes had already run;
+    it must instead print a clean error and return 1."""
+    import src.transcribe as t
+
+    primary = tmp_path / "primary.m4a"
+    primary.touch()
+    secondary = tmp_path / "secondary.m4a"
+    secondary.touch()
+
+    with patch.object(t, "ensure_apple_silicon"), \
+         patch.object(t, "gather_media", return_value=[primary]), \
+         patch.object(t, "load_dotenv"), \
+         patch.object(t, "load_diarization_pipeline", return_value=object()), \
+         patch("src.fusion.run_fusion",
+               side_effect=ValueError("len(embeddings_a) != len(embeddings_b): 6 vs 5")):
+        exit_code = t.main([
+            str(primary), "--fuse", str(secondary), "--output-dir", str(tmp_path),
+        ])
+
+    assert exit_code == 1
+    assert "error: len(embeddings_a) != len(embeddings_b)" in capsys.readouterr().err
+
+
+def test_main_fuse_reports_clean_error_when_diarization_pipeline_fails_to_load(tmp_path, capsys):
+    """load_diarization_pipeline's own clear RuntimeError (missing/invalid HF_TOKEN,
+    gated model terms not accepted) must surface as a clean error+return 1 in the
+    --fuse path too, not an unhandled traceback."""
+    import src.transcribe as t
+
+    primary = tmp_path / "primary.m4a"
+    primary.touch()
+    secondary = tmp_path / "secondary.m4a"
+    secondary.touch()
+
+    with patch.object(t, "ensure_apple_silicon"), \
+         patch.object(t, "gather_media", return_value=[primary]), \
+         patch.object(t, "load_dotenv"), \
+         patch.object(t, "load_diarization_pipeline",
+                       side_effect=RuntimeError("HF_TOKEN is not set. ...")):
+        exit_code = t.main([
+            str(primary), "--fuse", str(secondary), "--output-dir", str(tmp_path),
+        ])
+
+    assert exit_code == 1
+    assert "error: HF_TOKEN is not set" in capsys.readouterr().err
+
+
+def test_fuse_direct_script_invocation_resolves_fusion_import():
+    """Regression: `uv run python src/transcribe.py ... --fuse ...` (the documented,
+    real invocation) previously crashed with `ModuleNotFoundError: No module named
+    'src'`, because running transcribe.py directly (not `-m src.transcribe`) only
+    puts src/ itself on sys.path, not the project root, and main()'s --fuse branch
+    does `from src.fusion import run_fusion`.
+
+    This runs the real script as a subprocess (not an in-process import), so it is
+    actually sensitive to sys.path rather than just sys.modules caching -- an
+    in-process test that monkeypatches __package__ would still succeed via the
+    already-imported src.fusion module regardless of whether the fix is present.
+    HF_TOKEN is deliberately cleared so the run fails fast (no network/model
+    download) at load_diarization_pipeline's own clean RuntimeError -- proving
+    execution got past the import line without a ModuleNotFoundError.
+    """
+    import os
+    import sys
+
+    repo_root = Path(__file__).resolve().parent.parent
+    primary = repo_root / "tests" / "__init__.py"  # any real, harmless file
+    env = {**os.environ, "HF_TOKEN": ""}
+
+    result = subprocess.run(
+        [sys.executable, str(repo_root / "src" / "transcribe.py"),
+         str(primary), "--fuse", str(primary)],
+        cwd=repo_root, env=env, capture_output=True, text=True, timeout=60,
+    )
+
+    assert "ModuleNotFoundError" not in result.stderr
+    assert "HF_TOKEN is not set" in result.stderr
+    assert result.returncode == 1

@@ -242,7 +242,7 @@ def group_into_turns(aligned_words: list[dict]) -> list[dict]:
 
 
 def _format_timestamp(seconds: float) -> str:
-    total = int(seconds)
+    total = max(0, int(seconds))
     hours, remainder = divmod(total, 3600)
     minutes, secs = divmod(remainder, 60)
     if hours:
@@ -456,15 +456,25 @@ def main(argv: list[str] | None = None) -> int:
         if args.media is None or args.media.is_dir():
             print("error: --fuse requires 'media' to be a single file, not a directory/default batch", file=sys.stderr)
             return 1
-        load_dotenv()
-        diarization_pipeline = load_diarization_pipeline(os.environ.get("HF_TOKEN"))
-        output_dir = (args.output_dir or DEFAULT_OUTPUT_DIR).resolve()
+        if not args.media.exists():
+            print(f"error: no such file: '{args.media}'", file=sys.stderr)
+            return 1
+        if not args.fuse.exists():
+            print(f"error: no such file: '{args.fuse}'", file=sys.stderr)
+            return 1
         if __package__ in (None, ""):
             # Invoked directly (`python src/transcribe.py`, not `-m src.transcribe`):
             # only src/ itself is on sys.path, so `src` isn't a resolvable package
             # until the project root is added.
             sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
         from src.fusion import run_fusion
+        load_dotenv()
+        try:
+            diarization_pipeline = load_diarization_pipeline(os.environ.get("HF_TOKEN"))
+        except RuntimeError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        output_dir = (args.output_dir or DEFAULT_OUTPUT_DIR).resolve()
         try:
             out_path = run_fusion(
                 args.media,
@@ -483,6 +493,14 @@ def main(argv: list[str] | None = None) -> int:
             stderr = exc.stderr.decode(errors="replace") if exc.stderr else ""
             print(f"error: ffmpeg preprocessing failed:\n{stderr}", file=sys.stderr)
             return 1
+        except (ValueError, RuntimeError) as exc:
+            # Covers match_speakers's speaker-count-mismatch ValueError,
+            # align_words_to_speakers's zero-turns ValueError, and any other
+            # RuntimeError-shaped failure from the fusion pipeline -- without
+            # this, these surface as a raw traceback after both sources'
+            # full ASR + diarization passes have already run.
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
         print(f"Fused transcript written to {out_path}")
         return 0
 
@@ -491,7 +509,11 @@ def main(argv: list[str] | None = None) -> int:
     model_repo = resolve_model_repo(args.model)
 
     load_dotenv()
-    diarization_pipeline = load_diarization_pipeline(os.environ.get("HF_TOKEN"))
+    try:
+        diarization_pipeline = load_diarization_pipeline(os.environ.get("HF_TOKEN"))
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
     output_dir = (args.output_dir or DEFAULT_OUTPUT_DIR).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)

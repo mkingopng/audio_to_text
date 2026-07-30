@@ -83,11 +83,26 @@ def match_speakers(embeddings_a: dict[str, np.ndarray], embeddings_b: dict[str, 
 
 
 def _shift_and_remap(turns: list[dict], offset: float, speaker_map: dict[str, str]) -> list[dict]:
-    """Move turns from source B's local clock/speaker-id namespace onto source A's."""
-    return [
-        {**turn, "start": turn["start"] + offset, "end": turn["end"] + offset, "speaker": speaker_map[turn["speaker"]]}
-        for turn in turns
-    ]
+    """Move turns from source B's local clock/speaker-id namespace onto source A's.
+
+    A negative offset (B's recording started before A's) can shift a B turn to
+    end at or before A's timeline zero -- that's speech with no valid position
+    on the merged timeline, so it's dropped. A turn straddling zero is clipped
+    to start at 0 rather than rendering a nonsensical negative timestamp.
+    """
+    shifted = []
+    for turn in turns:
+        start = turn["start"] + offset
+        end = turn["end"] + offset
+        if end <= 0.0:
+            continue
+        shifted.append({
+            **turn,
+            "start": max(start, 0.0),
+            "end": end,
+            "speaker": speaker_map[turn["speaker"]],
+        })
+    return shifted
 
 
 def merge_turns(turns_a: list[dict], turns_b_shifted: list[dict]) -> list[dict]:
@@ -123,10 +138,16 @@ def merge_turns(turns_a: list[dict], turns_b_shifted: list[dict]) -> list[dict]:
         merged.append(turn)
 
     for turn in turns_b_shifted:
-        overlaps_any_a = any(
-            overlap_seconds(turn["start"], turn["end"], a["start"], a["end"]) > 0 for a in turns_a
+        # Same-speaker only: a B turn that merely overlaps in TIME with a
+        # different speaker's A turn (e.g. cross-talk one mic caught and the
+        # other didn't) is not "already represented" and must still be
+        # appended, or that speech is silently lost.
+        overlaps_same_speaker_a = any(
+            a["speaker"] == turn["speaker"]
+            and overlap_seconds(turn["start"], turn["end"], a["start"], a["end"]) > 0
+            for a in turns_a
         )
-        if not overlaps_any_a:
+        if not overlaps_same_speaker_a:
             merged.append(turn)
 
     merged.sort(key=lambda t: t["start"])
@@ -158,13 +179,23 @@ def run_fusion(
 
     with tempfile.TemporaryDirectory(prefix="whisper_fuse_") as tmp:
         tmp_dir = Path(tmp)
+        # Separate subdirectories: preprocess_audio names its output after the
+        # source file's stem, so two sources sharing a stem (e.g. a "meeting.mp4"
+        # + "meeting.m4a" pair, or two files from different folders that happen
+        # to share a name) would otherwise overwrite each other's WAV in a
+        # shared tmp_dir -- silently corrupting find_offset into comparing a
+        # file against itself.
+        dir_a = tmp_dir / "a"
+        dir_b = tmp_dir / "b"
+        dir_a.mkdir()
+        dir_b.mkdir()
         wav_a, turns_a, embeddings_a = _process_source(
-            primary_path, tmp_dir, model_repo=model_repo, language=language,
+            primary_path, dir_a, model_repo=model_repo, language=language,
             initial_prompt=initial_prompt, num_speakers=num_speakers,
             diarization_pipeline=diarization_pipeline,
         )
         wav_b, turns_b, embeddings_b = _process_source(
-            secondary_path, tmp_dir, model_repo=model_repo, language=language,
+            secondary_path, dir_b, model_repo=model_repo, language=language,
             initial_prompt=initial_prompt, num_speakers=num_speakers,
             diarization_pipeline=diarization_pipeline,
         )
