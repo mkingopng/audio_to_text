@@ -459,6 +459,11 @@ def main(argv: list[str] | None = None) -> int:
         load_dotenv()
         diarization_pipeline = load_diarization_pipeline(os.environ.get("HF_TOKEN"))
         output_dir = (args.output_dir or DEFAULT_OUTPUT_DIR).resolve()
+        if __package__ in (None, ""):
+            # Invoked directly (`python src/transcribe.py`, not `-m src.transcribe`):
+            # only src/ itself is on sys.path, so `src` isn't a resolvable package
+            # until the project root is added.
+            sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
         from src.fusion import run_fusion
         try:
             out_path = run_fusion(
