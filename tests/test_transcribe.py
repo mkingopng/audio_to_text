@@ -188,13 +188,22 @@ class _FakeDiarization:
         return sorted({label for _, _, label in self._tracks})
 
 
+class _FakeDiarizeOutput:
+    """Mirrors pyannote 4.x's DiarizeOutput: `.speaker_diarization` /
+    `.speaker_embeddings` attributes, not a `(diarization, embeddings)` tuple."""
+
+    def __init__(self, speaker_diarization, speaker_embeddings):
+        self.speaker_diarization = speaker_diarization
+        self.speaker_embeddings = speaker_embeddings
+
+
 def test_run_diarization_parses_pipeline_output_sorted_by_start():
     tracks = [(5.0, 9.0, "SPEAKER_00"), (0.0, 5.0, "SPEAKER_01")]
     embeddings_array = np.array([[1.0, 0.0], [0.0, 1.0]])  # row 0 -> SPEAKER_00, row 1 -> SPEAKER_01 (sorted order)
 
     def fake_pipeline(path, **kwargs):
-        assert kwargs == {"return_embeddings": True, "num_speakers": 2}
-        return _FakeDiarization(tracks), embeddings_array
+        assert kwargs == {"num_speakers": 2}
+        return _FakeDiarizeOutput(_FakeDiarization(tracks), embeddings_array)
 
     turns, embeddings = run_diarization(Path("fake.wav"), fake_pipeline, num_speakers=2)
 
@@ -209,15 +218,15 @@ def test_run_diarization_parses_pipeline_output_sorted_by_start():
 
 def test_run_diarization_omits_num_speakers_when_not_given():
     def fake_pipeline(path, **kwargs):
-        assert kwargs == {"return_embeddings": True}
-        return _FakeDiarization([(0.0, 1.0, "SPEAKER_00")]), np.array([[1.0]])
+        assert kwargs == {}
+        return _FakeDiarizeOutput(_FakeDiarization([(0.0, 1.0, "SPEAKER_00")]), np.array([[1.0]]))
 
     run_diarization(Path("fake.wav"), fake_pipeline, num_speakers=None)
 
 
 def test_run_diarization_warns_on_speaker_count_mismatch(capsys):
     def fake_pipeline(path, **kwargs):
-        return _FakeDiarization([(0.0, 1.0, "SPEAKER_00")]), np.array([[1.0]])
+        return _FakeDiarizeOutput(_FakeDiarization([(0.0, 1.0, "SPEAKER_00")]), np.array([[1.0]]))
 
     run_diarization(Path("fake.wav"), fake_pipeline, num_speakers=6)
 

@@ -331,11 +331,18 @@ def run_diarization(
 
     Returns (turns, embeddings): turns sorted by start; embeddings keyed by
     speaker id, one row per sorted(diarization.labels()).
+
+    pyannote 4.x's pipeline call always computes embeddings and returns a
+    DiarizeOutput object (`.speaker_diarization`, `.speaker_embeddings`) rather
+    than the `(Annotation, embeddings)` tuple `return_embeddings=True` produced
+    on 3.x -- there is no longer a kwarg to request/suppress embeddings.
     """
-    kwargs: dict = {"return_embeddings": True}
+    kwargs: dict = {}
     if num_speakers is not None:
         kwargs["num_speakers"] = num_speakers
-    diarization, embeddings_array = pipeline(str(wav_path), **kwargs)
+    output = pipeline(str(wav_path), **kwargs)
+    diarization = output.speaker_diarization
+    embeddings_array = output.speaker_embeddings
 
     turns = [
         {"start": float(turn.start), "end": float(turn.end), "speaker": speaker}
