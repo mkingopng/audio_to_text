@@ -1,6 +1,6 @@
 # Speaker Diarization + Dual-Source Fusion Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Replace flat `.txt` transcription output with speaker-attributed Markdown (`Person 1`..`Person N` headings), and fuse the two real recordings of the same 6-person meeting (Teams `.mp4` + phone `.m4a`) into one unified transcript.
 
@@ -34,14 +34,14 @@
 
 This repo currently has zero automated tests (confirmed: no `tests/` dir, no `pytest` in the venv). This task establishes the harness before any TDD work.
 
-- [ ] **Step 1: Add the new dependencies**
+- [x] **Step 1: Add the new dependencies**
 
 ```bash
 uv add pyannote.audio python-dotenv scipy
 uv add --dev pytest
 ```
 
-- [ ] **Step 2: Write the environment smoke test**
+- [x] **Step 2: Write the environment smoke test**
 
 Create `tests/test_environment.py`:
 
@@ -62,12 +62,12 @@ def test_hf_token_loads_from_dotenv():
     assert os.environ.get("HF_TOKEN"), "HF_TOKEN not found after load_dotenv() -- check .env"
 ```
 
-- [ ] **Step 3: Run it, confirm it passes**
+- [x] **Step 3: Run it, confirm it passes**
 
 Run: `uv run pytest tests/test_environment.py -v`
 Expected: both tests PASS. If `test_hf_token_loads_from_dotenv` fails, stop and check `.env` contains `HF_TOKEN=...` at the project root before continuing to any later task.
 
-- [ ] **Step 4: Confirm gated-model access manually**
+- [x] **Step 4: Confirm gated-model access manually**
 
 Run:
 ```bash
@@ -82,7 +82,7 @@ print(type(p))
 ```
 Expected: prints the pipeline's type with no authentication error. If it fails with a 403/gated-model error, the model terms haven't been accepted on huggingface.co yet — stop and accept them before continuing (this is a one-time manual step per the spec, not something to script around).
 
-- [ ] **Step 5: Confirm the `return_embeddings=True` output shape**
+- [x] **Step 5: Confirm the `return_embeddings=True` output shape**
 
 Run a short real clip (reuse one of the files already in `data/` — pick a ~30s slice isn't available, so just run on the full `Tag5_29_July_2026_10903_pm.m4a` once, it's fine for a one-off spike):
 ```bash
@@ -100,7 +100,7 @@ print('embeddings shape:', embeddings.shape)
 ```
 Expected: `embeddings.shape == (len(labels), N)` for some embedding dimension `N`, with rows in the same order as `sorted(labels)`. **Record whether this holds** — Task 6's `run_diarization` assumes `embeddings[i]` corresponds to `sorted(diarization.labels())[i]`. If the actual order differs (e.g. insertion order instead of sorted), adjust Task 6's implementation to match before writing it.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add pyproject.toml uv.lock tests/__init__.py tests/test_environment.py
@@ -123,7 +123,7 @@ git commit -m "test: add pytest harness, verify pyannote/scipy/dotenv deps"
 
 This is the fix for the segment-boundary misattribution problem: assigning speaker identity per-word (not per multi-second Whisper segment) so a mid-segment speaker change only misattributes the handful of words actually on the wrong side, not the whole segment.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_transcribe.py`:
 
@@ -167,12 +167,12 @@ def test_align_words_to_speakers_handles_gap_with_no_overlapping_turn():
     assert result[0]["speaker"] == "SPEAKER_01"
 ```
 
-- [ ] **Step 2: Run it, confirm it fails**
+- [x] **Step 2: Run it, confirm it fails**
 
 Run: `uv run pytest tests/test_transcribe.py -v`
 Expected: FAIL with `ImportError: cannot import name 'align_words_to_speakers'`.
 
-- [ ] **Step 3: Implement it**
+- [x] **Step 3: Implement it**
 
 Add to `src/transcribe.py` (near the other pure helpers, above `run_whisper`):
 
@@ -213,12 +213,12 @@ def align_words_to_speakers(words: list[dict], turns: list[dict]) -> list[dict]:
     return aligned
 ```
 
-- [ ] **Step 4: Run it, confirm it passes**
+- [x] **Step 4: Run it, confirm it passes**
 
 Run: `uv run pytest tests/test_transcribe.py -v`
 Expected: PASS (2 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/transcribe.py tests/test_transcribe.py
@@ -241,7 +241,7 @@ git commit -m "feat: add word-level speaker attribution (align_words_to_speakers
   - `group_into_turns(aligned_words: list[dict]) -> list[dict]` = `relabel_speakers(_group_consecutive(aligned_words))` — the single-file convenience entry point.
   - `render_markdown(turns: list[dict]) -> str` — turns must already be relabeled (i.e. `"speaker"` is `"Person N"`).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_transcribe.py`:
 
@@ -313,12 +313,12 @@ def test_render_markdown_formats_heading_and_timestamp():
     assert "## Person 1 — 01:02:05\n\nBack again.\n" in markdown
 ```
 
-- [ ] **Step 2: Run it, confirm it fails**
+- [x] **Step 2: Run it, confirm it fails**
 
 Run: `uv run pytest tests/test_transcribe.py -v`
 Expected: FAIL with `ImportError` for `_group_consecutive`, `group_into_turns`, `relabel_speakers`, `render_markdown`.
 
-- [ ] **Step 3: Implement it**
+- [x] **Step 3: Implement it**
 
 Add to `src/transcribe.py`, directly below `align_words_to_speakers`:
 
@@ -406,12 +406,12 @@ def render_markdown(turns: list[dict]) -> str:
     return "\n".join(blocks).rstrip() + "\n"
 ```
 
-- [ ] **Step 4: Run it, confirm it passes**
+- [x] **Step 4: Run it, confirm it passes**
 
 Run: `uv run pytest tests/test_transcribe.py -v`
 Expected: PASS (6 tests total including Task 2's).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/transcribe.py tests/test_transcribe.py
@@ -432,7 +432,7 @@ git commit -m "feat: add turn grouping, stable speaker relabeling, Markdown rend
 
 Currently `main()` only calls `preprocess_audio()` when `--preprocess`/`--denoise`/`--audio-filter` is passed; otherwise raw files (including videos) go straight into `mlx_whisper`, which decodes them internally. Diarization needs an actual WAV file on disk regardless, and both `run_whisper` and `run_diarization` need to see the *same* audio so their timestamps share one time base. This task makes extraction unconditional; the `--preprocess`/`--denoise` flags now only control whether a filter chain is layered on top.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/test_transcribe.py`:
 
@@ -459,12 +459,12 @@ def test_build_ffmpeg_args_with_filter():
     assert args[-1] == "/tmp/out.wav"
 ```
 
-- [ ] **Step 2: Run it, confirm it fails**
+- [x] **Step 2: Run it, confirm it fails**
 
 Run: `uv run pytest tests/test_transcribe.py -v`
 Expected: FAIL with `ImportError: cannot import name 'build_ffmpeg_args'`.
 
-- [ ] **Step 3: Implement it**
+- [x] **Step 3: Implement it**
 
 Replace the body of `preprocess_audio` in `src/transcribe.py` (currently lines 99-120) with:
 
@@ -523,12 +523,12 @@ to:
 
 Also update the `if do_preprocess:` print-guard above the loop — it should still only print the filter message when a filter chain is actually being applied, so leave that `if do_preprocess:` print block as-is; it's independent of extraction now being unconditional.
 
-- [ ] **Step 4: Run it, confirm it passes**
+- [x] **Step 4: Run it, confirm it passes**
 
 Run: `uv run pytest tests/test_transcribe.py -v`
 Expected: PASS (8 tests total).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/transcribe.py tests/test_transcribe.py
@@ -547,7 +547,7 @@ git commit -m "refactor: make audio extraction unconditional (needed by diarizat
 - Modifies: `run_whisper(media_path, *, model_repo, language="en", initial_prompt=None, verbose=None, word_timestamps=True) -> dict` — new keyword-only param, defaults to `True`.
 - Produces: `extract_words(result: dict) -> list[dict]` — flattens `result["segments"][*]["words"]` into one chronological list, for feeding into `align_words_to_speakers`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_transcribe.py`:
 
@@ -597,12 +597,12 @@ def test_extract_words_flattens_segments_in_order():
     assert [w["word"] for w in words] == ["Hi", " there"]
 ```
 
-- [ ] **Step 2: Run it, confirm it fails**
+- [x] **Step 2: Run it, confirm it fails**
 
 Run: `uv run pytest tests/test_transcribe.py -v`
 Expected: FAIL — `test_run_whisper_requests_word_timestamps_by_default` fails because `mock_transcribe.call_args.kwargs` has no `"word_timestamps"` key (current `run_whisper` doesn't pass it); `extract_words` fails to import.
 
-- [ ] **Step 3: Implement it**
+- [x] **Step 3: Implement it**
 
 Replace `run_whisper`'s signature and body in `src/transcribe.py`:
 
@@ -643,12 +643,12 @@ def extract_words(result: dict) -> list[dict]:
     return [word for segment in result["segments"] for word in segment["words"]]
 ```
 
-- [ ] **Step 4: Run it, confirm it passes**
+- [x] **Step 4: Run it, confirm it passes**
 
 Run: `uv run pytest tests/test_transcribe.py -v`
 Expected: PASS (11 tests total).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/transcribe.py tests/test_transcribe.py
@@ -670,7 +670,7 @@ git commit -m "feat: request word-level timestamps by default, add extract_words
     - `turns`: list of `{"start": float, "end": float, "speaker": str}` sorted by `start`.
     - `embeddings`: `{speaker_id: numpy.ndarray}`, one row per `sorted(pipeline_output.labels())`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/test_transcribe.py`:
 
@@ -742,12 +742,12 @@ def test_load_diarization_pipeline_raises_clear_error_without_token():
 
 **Note:** if Task 1 Step 5's real-world check found `embeddings` rows are in a *different* order than `sorted(labels())` (e.g. insertion order), update `run_diarization`'s implementation below accordingly before writing it, and adjust this test's `embeddings_array`/expectations to match reality rather than the assumption.
 
-- [ ] **Step 2: Run it, confirm it fails**
+- [x] **Step 2: Run it, confirm it fails**
 
 Run: `uv run pytest tests/test_transcribe.py -v`
 Expected: FAIL with `ImportError: cannot import name 'run_diarization'`.
 
-- [ ] **Step 3: Implement it**
+- [x] **Step 3: Implement it**
 
 Add near the top of `src/transcribe.py`, with the other imports:
 
@@ -820,12 +820,12 @@ def run_diarization(
     return turns, embeddings
 ```
 
-- [ ] **Step 4: Run it, confirm it passes**
+- [x] **Step 4: Run it, confirm it passes**
 
 Run: `uv run pytest tests/test_transcribe.py -v`
 Expected: PASS (15 tests total).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/transcribe.py tests/test_transcribe.py
@@ -845,7 +845,7 @@ git commit -m "feat: add run_diarization (pyannote wrapper, injectable pipeline 
 
 No new unit test here — this task wires already-tested pure functions together and its correctness is validated by actually running it, per the spec's manual-validation approach (there's no automated ground truth for "is this the right speaker").
 
-- [ ] **Step 1: Add the `--num-speakers` argument**
+- [x] **Step 1: Add the `--num-speakers` argument**
 
 In `main()`'s `argparse` setup, after the `--verbose` argument:
 
@@ -859,7 +859,7 @@ In `main()`'s `argparse` setup, after the `--verbose` argument:
     )
 ```
 
-- [ ] **Step 2: Load the diarization pipeline once per run**
+- [x] **Step 2: Load the diarization pipeline once per run**
 
 Right after `model_repo = resolve_model_repo(args.model)` in `main()`, add:
 
@@ -874,7 +874,7 @@ import os
 from dotenv import load_dotenv
 ```
 
-- [ ] **Step 3: Replace the per-file transcribe-and-write body**
+- [x] **Step 3: Replace the per-file transcribe-and-write body**
 
 Replace this block inside the `for media_path in file_iter:` loop:
 ```python
@@ -937,12 +937,12 @@ with:
             print(f"  -> wrote {out_path}")
 ```
 
-- [ ] **Step 4: Run the full pytest suite to confirm nothing regressed**
+- [x] **Step 4: Run the full pytest suite to confirm nothing regressed**
 
 Run: `uv run pytest -v`
 Expected: all tests still PASS (nothing in this task touched tested pure functions, only `main()`'s orchestration).
 
-- [ ] **Step 5: Validate manually on one real file**
+- [x] **Step 5: Validate manually on one real file**
 
 Run against the phone recording (smaller scope than the fusion pair, good first real-world check):
 ```bash
@@ -955,7 +955,7 @@ Expected: completes without error, writes `output/Tag5_29_July_2026_10903_pm.md`
 
 This is a judgment call, not a scripted assertion — record what you observe before moving on to fusion (Task 8+), since fusion's correctness partly depends on each source's diarization already being reasonable.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/transcribe.py
@@ -973,7 +973,7 @@ git commit -m "feat: wire single-file diarization pipeline end-to-end, write Mar
 **Interfaces:**
 - Produces: `find_offset(wav_a: Path, wav_b: Path, *, window_seconds: float = 0.1) -> float` — seconds to **add** to source B's timestamps to align them onto source A's timeline (`a_time == b_time + offset`).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_fusion.py`:
 
@@ -1006,12 +1006,12 @@ def test_find_offset_recovers_known_delay(tmp_path):
     assert abs(offset - delay_seconds) < 0.15  # within one default window_seconds
 ```
 
-- [ ] **Step 2: Run it, confirm it fails**
+- [x] **Step 2: Run it, confirm it fails**
 
 Run: `uv run pytest tests/test_fusion.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'src.fusion'`.
 
-- [ ] **Step 3: Implement it**
+- [x] **Step 3: Implement it**
 
 Create `src/fusion.py`:
 
@@ -1056,12 +1056,12 @@ def find_offset(wav_a: Path, wav_b: Path, *, window_seconds: float = 0.1) -> flo
     return lag_index * window_seconds
 ```
 
-- [ ] **Step 4: Run it, confirm it passes**
+- [x] **Step 4: Run it, confirm it passes**
 
 Run: `uv run pytest tests/test_fusion.py -v`
 Expected: PASS. If the sign is inverted (offset comes out as `-1.5`), that means the correlate/lag convention is flipped from what's assumed here — fix by negating `lag_index` in the return line, then re-run until it passes. This is the one piece of this task where empirically confirming the sign via the test *is* the implementation step, not a shortcut around it.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/fusion.py tests/test_fusion.py
@@ -1079,7 +1079,7 @@ git commit -m "feat: add find_offset for dual-source timeline synchronization"
 **Interfaces:**
 - Produces: `match_speakers(embeddings_a: dict[str, np.ndarray], embeddings_b: dict[str, np.ndarray]) -> dict[str, str]` — maps each of source A's local speaker ids to the corresponding source B local speaker id (the closest 1:1 assignment by cosine similarity, via the Hungarian algorithm).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/test_fusion.py`:
 
@@ -1110,12 +1110,12 @@ def test_match_speakers_recovers_permutation_across_relabeled_sources():
     assert mapping == {"SPEAKER_00": "SPK_A", "SPEAKER_01": "SPK_B", "SPEAKER_02": "SPK_C"}
 ```
 
-- [ ] **Step 2: Run it, confirm it fails**
+- [x] **Step 2: Run it, confirm it fails**
 
 Run: `uv run pytest tests/test_fusion.py -v`
 Expected: FAIL with `ImportError: cannot import name 'match_speakers'`.
 
-- [ ] **Step 3: Implement it**
+- [x] **Step 3: Implement it**
 
 Add to `src/fusion.py`:
 
@@ -1145,12 +1145,12 @@ def match_speakers(embeddings_a: dict[str, np.ndarray], embeddings_b: dict[str, 
     return {labels_a[row]: labels_b[col] for row, col in zip(row_indices, col_indices)}
 ```
 
-- [ ] **Step 4: Run it, confirm it passes**
+- [x] **Step 4: Run it, confirm it passes**
 
 Run: `uv run pytest tests/test_fusion.py -v`
 Expected: PASS (2 tests total).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/fusion.py tests/test_fusion.py
@@ -1170,7 +1170,7 @@ git commit -m "feat: add match_speakers (Hungarian-algorithm cross-source speake
   - `_shift_and_remap(turns: list[dict], offset: float, speaker_map: dict[str, str]) -> list[dict]` — shifts `start`/`end` by `offset` and renames `"speaker"` via `speaker_map` (source B's local id → source A's local id namespace).
   - `merge_turns(turns_a: list[dict], turns_b_shifted: list[dict]) -> list[dict]` — both inputs are `_group_consecutive`-shaped (un-relabeled, with `"confidence"`), `turns_b_shifted` already shifted/remapped into A's namespace via `_shift_and_remap`. Source A's turns define the canonical turn boundaries; a turn is replaced by B's overlapping text only when B's confidence is strictly higher. Any B turn that doesn't overlap *any* A turn (A missed that speaker/moment entirely) is appended and the result re-sorted by `start`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/test_fusion.py`:
 
@@ -1209,12 +1209,12 @@ def test_merge_turns_prefers_higher_confidence_source_and_appends_gaps():
     ]
 ```
 
-- [ ] **Step 2: Run it, confirm it fails**
+- [x] **Step 2: Run it, confirm it fails**
 
 Run: `uv run pytest tests/test_fusion.py -v`
 Expected: FAIL with `ImportError` for `_shift_and_remap` and `merge_turns`.
 
-- [ ] **Step 3: Implement it**
+- [x] **Step 3: Implement it**
 
 Add to `src/fusion.py` (needs `overlap_seconds` — import it rather than duplicating the logic already written in `transcribe.py`):
 
@@ -1264,12 +1264,12 @@ def merge_turns(turns_a: list[dict], turns_b_shifted: list[dict]) -> list[dict]:
     return merged
 ```
 
-- [ ] **Step 4: Run it, confirm it passes**
+- [x] **Step 4: Run it, confirm it passes**
 
 Run: `uv run pytest -v`
 Expected: all tests PASS, including the full suite from earlier tasks.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/transcribe.py src/fusion.py tests/test_transcribe.py tests/test_fusion.py
@@ -1289,7 +1289,7 @@ git commit -m "feat: add merge_turns for confidence-based cross-source turn sele
 
 No new unit test — this task is pure orchestration of already-tested pieces (Tasks 2-3, 5-6, 8-10). Its correctness is checked via the real-recording validation in Tasks 12-13.
 
-- [ ] **Step 1: Implement `run_fusion` in `src/fusion.py`**
+- [x] **Step 1: Implement `run_fusion` in `src/fusion.py`**
 
 Add:
 
@@ -1356,7 +1356,7 @@ def run_fusion(
     return out_path
 ```
 
-- [ ] **Step 2: Wire `--fuse` into `transcribe.py`'s CLI**
+- [x] **Step 2: Wire `--fuse` into `transcribe.py`'s CLI**
 
 In `main()`'s `argparse` setup, after `--num-speakers`:
 
@@ -1400,12 +1400,12 @@ Add the import at the top of `src/transcribe.py`:
 from src.fusion import run_fusion
 ```
 
-- [ ] **Step 3: Run the full pytest suite**
+- [x] **Step 3: Run the full pytest suite**
 
 Run: `uv run pytest -v`
 Expected: all tests still PASS (this task only added orchestration and CLI wiring around already-tested pieces).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/fusion.py src/transcribe.py
@@ -1418,7 +1418,7 @@ git commit -m "feat: add run_fusion orchestrator and --fuse CLI flag"
 
 **Files:** none (validation only)
 
-- [ ] **Step 1: Check the sync offset is plausible**
+- [x] **Step 1: Check the sync offset is plausible**
 
 ```bash
 uv run python -c "
@@ -1438,7 +1438,7 @@ Expected: a single plausible number (could be negative if the phone recording ac
 
 **If this offset looks implausible** (e.g. wildly larger than the actual room setup would allow, or the sanity-check moment doesn't line up when shifted by this amount): the `_rms_envelope`-based correlation may be too coarse for these two mic positions/qualities. This is the clock-drift/sync risk flagged in the spec (§10) — don't force a plausible-looking number if it demonstrably isn't; note the discrepancy and treat single-offset sync as not viable for this file pair before proceeding further, rather than pushing ahead with fusion on a broken alignment.
 
-- [ ] **Step 2: Check the speaker matching is plausible**
+- [x] **Step 2: Check the speaker matching is plausible**
 
 ```bash
 uv run python -c "
@@ -1461,7 +1461,7 @@ with tempfile.TemporaryDirectory() as tmp:
 ```
 Expected: a 1:1 mapping covering all 6 speakers from each source. Spot-check 2-3 of the matched pairs by ear: find a moment where that speaker talks in source A, and confirm the same voice is what's attributed to their matched label in source B at the corresponding (offset-shifted) time.
 
-- [ ] **Step 3: Record what you observed**
+- [x] **Step 3: Record what you observed**
 
 No commit for this task — it's a validation checkpoint. If either check looks wrong, stop here and reconsider before running the full fusion in Task 13 (garbage sync/matching will produce a garbled final transcript no amount of downstream logic can fix).
 
@@ -1471,20 +1471,78 @@ No commit for this task — it's a validation checkpoint. If either check looks 
 
 **Files:** none (validation only)
 
-- [ ] **Step 1: Run the full fusion pipeline on the real recordings**
+- [x] **Step 1: Run the full fusion pipeline on the real recordings**
 
 ```bash
 uv run python src/transcribe.py "data/Meeting with Michael Kingston-20260729_130839-Meeting Recording.mp4" --fuse "data/Tag5_29_July_2026_10903_pm.m4a" --num-speakers 6
 ```
 Expected: completes without error, writes `output/Meeting with Michael Kingston-20260729_130839-Meeting Recording.md`.
 
-- [ ] **Step 2: Spot-check against the spec's acceptance criteria**
+- [x] **Step 2: Spot-check against the spec's acceptance criteria**
 
 Open the output and check, per the spec's §2 success criteria and §11 acceptance step:
 - Several speaker transitions, checked by ear against the actual recording(s) — is the attributed speaker correct more often than not?
 - Samples from the start, middle, and end of the ~70-minute meeting — does speaker identity stay stable (no `Person N` renumbering drift partway through)?
 - All 6 people appear as distinct `Person N` labels somewhere in the document (not collapsed into fewer than 6, and not split into more than 6).
 
-- [ ] **Step 3: Record the outcome**
+- [x] **Step 3: Record the outcome**
 
 No commit for this task (no code changes) — this is the spec's final acceptance check. If it passes, the feature is functionally done and ready for `/review` → `/verify` per the outer workflow. If it doesn't hold up, decide with the user whether to iterate on `merge_turns`'s selection heuristic, the sync/matching steps from Task 12, or scale back scope — don't silently ship a transcript that doesn't meet the stated bar.
+
+---
+
+## Amendment log
+
+**2026-07-29 — pyannote.audio API correction (pre-implementation).** Task 1's dependency
+install resolved `pyannote.audio` to 4.0.7, not the 3.x line the model-card examples in this
+plan were written against. `Pipeline.from_pretrained()` takes `token=`, not `use_auth_token=`.
+All three occurrences in this plan were corrected before Task 6 built against them
+(commit `3c1ac3c`).
+
+**2026-07-30 — pyannote 4.x return-type correction (during live validation).** A second,
+larger API break surfaced only once a real (non-mocked) pipeline ran: `return_embeddings=True`
+is silently ignored in 4.0.7 (it emits a `UserWarning`), and the pipeline call returns a
+`DiarizeOutput` dataclass (`.speaker_diarization`, `.speaker_embeddings`) rather than the
+`(Annotation, embeddings)` tuple Task 6's plan code assumed. Every unit test had mocked the
+old tuple contract, so this was invisible until Task 1's Step 5 ran against real audio.
+`run_diarization` and its tests were corrected (commit `2853396`). This also retroactively
+confirmed Task 6's carried-over open risk about embeddings-row ordering — pyannote's own
+source documents the rows as sorted in `speaker_diarization.labels()` order, matching what
+the code assumed.
+
+**2026-07-30 — direct-script invocation fix (not in the original plan).** Task 11's
+`from src.fusion import run_fusion` local import (added to break a `transcribe.py` ↔
+`fusion.py` circular import) crashed with `ModuleNotFoundError` under the documented
+invocation `uv run python src/transcribe.py ... --fuse ...`, because running a script
+directly puts only `src/` on `sys.path`, not the project root. Fixed with a `__package__`-
+guarded `sys.path` insert (commit `8c54428`); a subprocess-based regression test was added
+later during `/review` (commit `13c7860`), since an in-process test would pass regardless of
+the fix.
+
+**2026-07-30 — `merge_turns` duplication fix (parked risk became real).** Task 10's review
+flagged, and parked as hypothetical, that a single B turn spanning two same-speaker A turns
+could have its text duplicated into both. Task 13's first real run reproduced it exactly.
+Fixed with a used-B-turn set so each B turn replaces at most one A turn (commit `98b8fda`).
+
+**2026-07-31 — `/review` findings (2 Critical, 4 Important) fixed before completion**
+(commit `13c7860`). None were foreseen in this plan:
+- `run_fusion` gave both sources the same temp directory; two inputs sharing a filename stem
+  would silently overwrite each other's preprocessed WAV, corrupting `find_offset` into
+  comparing a file against itself (a plausible-looking 0.0 offset). Now one subdirectory each.
+- `match_speakers`'s speaker-count-mismatch `ValueError` — an expected outcome without
+  `--num-speakers`, not a corner case — was unhandled in `--fuse`, surfacing as a raw
+  traceback *after* both sources' full ASR + diarization passes. Now a clean error.
+- `merge_turns`'s gap-fill check ignored speaker identity, silently dropping B turns that
+  overlapped a *different* speaker's A turn. Fixing this recovered 160 turns of real speech
+  on the target recordings (554 → 714 blocks) — the single highest-impact fix in the review.
+- Negative sync offsets could render timestamps as `-1:59:59`; `--fuse` had no pre-flight
+  file-existence check; `load_diarization_pipeline`'s `RuntimeError` was uncaught in both
+  paths. All fixed.
+
+**2026-07-31 — regression coverage added at FINISH.** The `--preprocess`/`--denoise`/
+`--audio-filter` flag wiring (previously-working behaviour that Task 4 refactored when it
+made extraction unconditional) had no test guarding it. Four tests added.
+
+**Not done — deferred with reasoning.** See `bugs.md` for the residual `merge_turns`
+whole-turn-granularity redundancy, the absent confidence check on the correlation peak, and
+upstream Whisper hallucination artifacts.

@@ -289,6 +289,69 @@ def test_main_continues_batch_after_diarization_failure(tmp_path, capsys):
     assert "error: diarization failed for 'fake1.m4a'" in capsys.readouterr().err
 
 
+def _run_main_capturing_audio_filter(argv, tmp_path):
+    """Drive main()'s batch path with everything heavy mocked, returning the
+    audio_filter value it passed to preprocess_audio."""
+    import src.transcribe as t
+
+    seen = {}
+    fake_result = {
+        "segments": [{"words": [{"word": "hi", "start": 0.0, "end": 0.5, "probability": 0.9}]}],
+    }
+
+    def fake_preprocess(media_path, tmp_dir, audio_filter):
+        seen["audio_filter"] = audio_filter
+        return media_path
+
+    with patch.object(t, "ensure_apple_silicon"), \
+         patch.object(t, "gather_media", return_value=[Path("fake.m4a")]), \
+         patch.object(t, "load_dotenv"), \
+         patch.object(t, "load_diarization_pipeline", return_value=object()), \
+         patch.object(t, "preprocess_audio", side_effect=fake_preprocess), \
+         patch.object(t, "run_whisper", return_value=fake_result), \
+         patch.object(t, "run_diarization",
+                       return_value=([{"start": 0.0, "end": 1.0, "speaker": "SPEAKER_00"}], {})):
+        exit_code = t.main([*argv, "--output-dir", str(tmp_path)])
+
+    assert exit_code == 0
+    return seen["audio_filter"]
+
+
+def test_main_applies_no_audio_filter_by_default(tmp_path):
+    """Regression guard on previously-working behaviour: --preprocess/--denoise are
+    opt-in. Task 4 made *extraction* unconditional (diarization needs the WAV
+    regardless), and it would be easy for a later change to make the filter chain
+    unconditional along with it -- which would silently alter the audio every
+    existing no-flag invocation feeds to Whisper."""
+    assert _run_main_capturing_audio_filter(["fake.m4a"], tmp_path) is None
+
+
+def test_main_applies_default_filter_chain_with_preprocess_flag(tmp_path):
+    """Regression guard: --preprocess still builds and passes the highpass+loudnorm
+    chain (no denoise stage)."""
+    audio_filter = _run_main_capturing_audio_filter(["fake.m4a", "--preprocess"], tmp_path)
+
+    assert audio_filter == "highpass=f=80,loudnorm=I=-16:TP=-1.5:LRA=11"
+
+
+def test_main_adds_denoise_stage_and_implies_preprocess(tmp_path):
+    """Regression guard: --denoise alone implies preprocessing and inserts the
+    afftdn stage between the highpass and loudnorm stages."""
+    audio_filter = _run_main_capturing_audio_filter(["fake.m4a", "--denoise"], tmp_path)
+
+    assert audio_filter == "highpass=f=80,afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11"
+
+
+def test_main_audio_filter_override_wins(tmp_path):
+    """Regression guard: an explicit --audio-filter overrides the built chain
+    (and implies preprocessing) rather than being combined with it."""
+    audio_filter = _run_main_capturing_audio_filter(
+        ["fake.m4a", "--audio-filter", "highpass=f=200", "--denoise"], tmp_path
+    )
+
+    assert audio_filter == "highpass=f=200"
+
+
 def test_main_fuse_reports_clean_error_on_missing_media_file(tmp_path, capsys):
     """--fuse must fail cleanly, before running any pipeline, if the primary media
     file doesn't exist. This is a real (unmocked) pre-flight check -- run_fusion
