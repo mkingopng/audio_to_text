@@ -98,18 +98,27 @@ def merge_turns(turns_a: list[dict], turns_b_shifted: list[dict]) -> list[dict]:
     higher (selection happens at turn granularity, not per-word -- splicing
     two independently-run ASR passes word-by-word risks garbled sentences
     where the two passes segment speech slightly differently).
+
+    A single B turn can span (temporally overlap) more than one A turn -- e.g.
+    when A's diarization splits one continuous utterance into two turns that
+    B's diarization kept as one. Each B turn is used as a replacement at most
+    once (first-come, chronologically-earliest A turn wins it), so the same
+    B text can't get duplicated into two separate merged turns.
     """
     merged = []
+    used_b_ids: set[int] = set()
     for turn in turns_a:
         overlapping_b = [
             b for b in turns_b_shifted
-            if b["speaker"] == turn["speaker"]
+            if id(b) not in used_b_ids
+            and b["speaker"] == turn["speaker"]
             and overlap_seconds(turn["start"], turn["end"], b["start"], b["end"]) > 0
         ]
         if overlapping_b:
             best_b = max(overlapping_b, key=lambda b: b["confidence"])
             if best_b["confidence"] > turn["confidence"]:
                 merged.append({**turn, "text": best_b["text"], "confidence": best_b["confidence"]})
+                used_b_ids.add(id(best_b))
                 continue
         merged.append(turn)
 

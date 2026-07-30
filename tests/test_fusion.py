@@ -121,3 +121,24 @@ def test_merge_turns_prefers_higher_confidence_source_and_appends_gaps():
         {"speaker": "A1", "start": 5.0, "end": 9.0, "text": "clear phone audio", "confidence": 0.9},
         {"speaker": "A2", "start": 9.0, "end": 11.0, "text": "only caught by phone", "confidence": 0.8},
     ]
+
+
+def test_merge_turns_does_not_duplicate_a_b_turn_spanning_two_a_turns():
+    """Regression: a single B turn overlapping two same-speaker A turns must
+    replace at most one of them, not get copy-pasted into both (observed on
+    the real Task 13 fusion run: identical text appeared under two separate
+    Person N headings a few seconds apart)."""
+    turns_a = [
+        {"speaker": "A0", "start": 0.0, "end": 5.0, "text": "a turn one", "confidence": 0.3},
+        {"speaker": "A1", "start": 5.0, "end": 6.0, "text": "interjection", "confidence": 0.9},
+        {"speaker": "A0", "start": 6.0, "end": 11.0, "text": "a turn two", "confidence": 0.3},
+    ]
+    turns_b_shifted = [
+        # one continuous B turn spanning both of A0's turns (and the interjection gap)
+        {"speaker": "A0", "start": 0.1, "end": 10.9, "text": "one continuous phone turn", "confidence": 0.8},
+    ]
+
+    merged = merge_turns(turns_a, turns_b_shifted)
+
+    a0_texts = [t["text"] for t in merged if t["speaker"] == "A0"]
+    assert a0_texts == ["one continuous phone turn", "a turn two"]
