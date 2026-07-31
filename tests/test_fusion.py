@@ -241,6 +241,52 @@ def test_merge_turns_replacement_does_not_produce_impossible_speaking_rate():
     )
 
 
+def _stub_fusion(monkeypatch, tmp_path):
+    """Patch out the ASR/diarization/offset work so run_fusion's output naming
+    can be tested without a real 70-minute pipeline run."""
+    from audio_to_text import fusion
+
+    def fake_process_source(media_path, tmp_dir, **kwargs):
+        wav_path = tmp_dir / (media_path.stem + ".clean.wav")
+        wav_path.write_bytes(b"")
+        speaker = "SPEAKER_00"
+        turns = [{"speaker": speaker, "start": 0.0, "end": 1.0, "text": "hi", "confidence": 0.9}]
+        return wav_path, turns, {speaker: np.array([1.0, 0.0])}
+
+    monkeypatch.setattr(fusion, "_process_source", fake_process_source)
+    monkeypatch.setattr(fusion, "find_offset", lambda wav_a, wav_b: 0.0)
+    return fusion
+
+
+def test_run_fusion_writes_fused_suffix_and_leaves_single_file_transcript_intact(
+    tmp_path, monkeypatch
+):
+    """A fused run must not silently destroy a single-file transcript of the same
+    primary. Both modes named the output after the primary's stem, so transcribing
+    teams.mp4 and then fusing teams.mp4 --fuse phone.m4a wrote teams.md twice, the
+    second run replacing the first with no warning.
+
+    Fusion now writes <stem>.fused.md, so the two modes cannot collide and the
+    filename records which pipeline produced it.
+    """
+    fusion = _stub_fusion(monkeypatch, tmp_path)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    # a transcript from an earlier single-file run of the SAME primary
+    single_file = out_dir / "meeting.md"
+    single_file.write_text("the single-file transcript", encoding="utf-8")
+
+    out_path = fusion.run_fusion(
+        tmp_path / "meeting.mp4", tmp_path / "phone.m4a",
+        model_repo="x", language="en", initial_prompt=None, num_speakers=None,
+        output_dir=out_dir, diarization_pipeline=object(),
+    )
+
+    assert out_path.name == "meeting.fused.md"
+    assert out_path.is_file()
+    assert single_file.read_text(encoding="utf-8") == "the single-file transcript"
+
+
 def test_run_fusion_uses_separate_tmp_dirs_for_each_source(tmp_path, monkeypatch):
     """Regression: two sources sharing a filename stem (e.g. two recordings each
     named "meeting", one .mp4 and one .m4a, or two files from different folders

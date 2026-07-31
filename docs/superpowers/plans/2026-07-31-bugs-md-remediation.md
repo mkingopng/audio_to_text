@@ -59,10 +59,10 @@ output's filename only, not the CLI argument surface.
 
 ## Task 4 — fused output takes a `.fused.md` suffix
 
-- [ ] 4.1 Test: `run_fusion` writes `<stem>.fused.md`, and a pre-existing `<stem>.md`
+- [x] 4.1 Test: `run_fusion` writes `<stem>.fused.md`, and a pre-existing `<stem>.md`
       from a single-file run survives untouched.
-- [ ] 4.2 Fix: change the output filename in `run_fusion`.
-- [ ] 4.3 Mutation-test; update README.
+- [x] 4.2 Fix: change the output filename in `run_fusion`.
+- [x] 4.3 Mutation-test; update README.
 
 ## Task 5 — warn on Whisper repetition loops
 

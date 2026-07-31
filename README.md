@@ -86,6 +86,9 @@ audio-to-text "data/meeting-video.mp4" \
   --num-speakers 6
 ```
 
+A fused run writes `<primary-stem>.fused.md`, so it sits alongside — rather than
+overwrites — the `<primary-stem>.md` a single-file run of the same recording produces.
+
 Optional audio cleanup before transcription (off by default):
 
 ```bash

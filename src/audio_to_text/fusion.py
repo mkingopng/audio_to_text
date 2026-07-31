@@ -222,6 +222,11 @@ def run_fusion(
         speaker_turns = relabel_speakers(merged)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    out_path = output_dir / f"{primary_path.stem}.md"
+    # ".fused.md", not ".md": the single-file path also names its output after the
+    # primary's stem, so transcribing teams.mp4 and then fusing it against a second
+    # recording used to write teams.md twice -- the fused run silently replacing the
+    # single-file transcript. The suffix keeps both and records which pipeline
+    # produced which.
+    out_path = output_dir / f"{primary_path.stem}.fused.md"
     out_path.write_text(render_markdown(speaker_turns), encoding="utf-8")
     return out_path
