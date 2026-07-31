@@ -101,7 +101,7 @@ output's filename only, not the CLI argument surface.
 ## Task 8 — reconcile the record
 
 - [x] 8.1 Rewrite `bugs.md`: each entry closed or logged, every number one I measured.
-- [ ] 8.2 Write up the re-measurement in `docs/validate/`, including where it corrects
+- [x] 8.2 Write up the re-measurement in `docs/validate/`, including where it corrects
       the prior triage.
 - [x] 8.3 Full suite green; fused run driven end-to-end; before/after measured.
 
@@ -115,3 +115,25 @@ output's filename only, not the CLI argument surface.
 3. A real `--fuse` run completes and its output is measured with `analyze_transcript.py`.
 4. Task 6 lands only if hand-checking shows it destroys no genuine speech.
 5. `bugs.md` contains no number that cannot be reproduced from a committed script.
+
+---
+
+## Amendment log
+
+**2026-07-31 — Task 9 added, from the REVIEW pass (code-review half).**
+Two defects found in this branch's own work, neither present before it:
+
+- `_correlate_envelopes` reported `inf` confidence whenever both recordings were
+  shorter than the ±5 s rival-exclusion window (every rival masked to `-inf`), so two
+  unrelated clips scored a perfect alignment and suppressed the warning — the failure
+  the metric exists to catch, inverted. Now scores 0.0 so the caller warns.
+- The five analysis tools resolved the capture as `tools/capture/`, which does not
+  exist once they are committed under `tools/`. **None of the commands `bugs.md`
+  documents as "reproduce with" actually ran.** They now share `tools/_capture.py`
+  (default `data/fusion-capture/`, override `FUSION_CAPTURE_DIR`).
+
+- [x] 9.1 Test: an unmeasurable alignment scores below the warn threshold.
+- [x] 9.2 Fix both; mutation-test the confidence fix.
+- [x] 9.3 Verify all five tools run against the real capture and reproduce their numbers.
+
+Landed as `13817af`. No task was dropped or re-scoped.
