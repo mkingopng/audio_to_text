@@ -7,22 +7,25 @@ reference `openai-whisper` package. ffmpeg (used by MLX) decodes the audio track
 directly, so audio files (.m4a, .mp3, .wav, ...) and video files (.mp4, .mov, ...)
 both work through the same path -- no separate audio-extraction step is required.
 
-Run with no arguments (e.g. the IDE "Run" button) to transcribe every media
-file in the project's data/ folder, writing a .txt per file to output/:
+Installed as `audio-to-text` on PATH, so it can be called from any project. Run
+with no arguments to transcribe every media file in ./data/, writing one .md per
+file to ./data/transcriptions/ -- both relative to the current directory:
 
-    uv run python src/transcribe.py
+    audio-to-text
 
 Or point it at a specific file or directory:
 
-    uv run python src/transcribe.py "data/Crisis shield m1.m4a"
-    uv run python src/transcribe.py "data/Crisis_shield_m2_3_July_2026.mov" --preprocess --denoise --prompt "Allan, Michael"
+    audio-to-text "data/Crisis shield m1.m4a"
+    audio-to-text "data/Crisis_shield_m2_3_July_2026.mov" --preprocess --denoise --prompt "Allan, Michael"
 
-    uv run python src/transcribe.py meeting.mp4 --prompt "Crisis Shield, ZeroW, Margu"
+    audio-to-text meeting.mp4 --prompt "Crisis Shield, ZeroW, Margu"
 
 Pass --preprocess to clean the audio with ffmpeg first (high-pass + loudness
 normalization), and add --denoise for an extra FFT noise-reduction pass:
 
-    uv run python src/transcribe.py --preprocess --denoise
+    audio-to-text --preprocess --denoise
+
+Inside this repo, `uv run audio-to-text ...` runs the same entry point.
 """
 from __future__ import annotations
 
@@ -462,12 +465,10 @@ def main(argv: list[str] | None = None) -> int:
         if not args.fuse.exists():
             print(f"error: no such file: '{args.fuse}'", file=sys.stderr)
             return 1
-        if __package__ in (None, ""):
-            # Invoked directly (`python src/transcribe.py`, not `-m src.transcribe`):
-            # only src/ itself is on sys.path, so `src` isn't a resolvable package
-            # until the project root is added.
-            sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-        from src.fusion import run_fusion
+        # Deferred deliberately: fusion.py imports nine names from this module at
+        # module level, so importing it at the top here would be a circular import
+        # that fails at load time. Do not hoist this.
+        from audio_to_text.fusion import run_fusion
         load_dotenv()
         try:
             diarization_pipeline = load_diarization_pipeline(os.environ.get("HF_TOKEN"))

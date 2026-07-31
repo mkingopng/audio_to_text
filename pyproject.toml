@@ -19,3 +19,16 @@ dependencies = [
 dev = [
     "pytest>=9.1.1",
 ]
+
+# Load-bearing, not boilerplate: without a build backend uv treats this as a
+# virtual project and never installs it onto .venv's import path, so
+# `python -m audio_to_text.transcribe` -- what the PATH wrapper calls -- can't resolve.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+audio-to-text = "audio_to_text.transcribe:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/audio_to_text"]

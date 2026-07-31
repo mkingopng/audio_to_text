@@ -14,7 +14,7 @@ from scipy import signal
 from scipy.io import wavfile
 from scipy.optimize import linear_sum_assignment
 
-from src.transcribe import (
+from audio_to_text.transcribe import (
     align_words_to_speakers,
     _group_consecutive,
     extract_words,

@@ -39,7 +39,7 @@ The single highest-risk task: it moves every source file and re-points all 40 ex
 - Consumes: nothing — this is the first task.
 - Produces: the importable package `audio_to_text`, with `audio_to_text.transcribe` and `audio_to_text.fusion` as modules. Every later task imports from these paths. The runnable entry point is `python -m audio_to_text.transcribe`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_packaging.py`:
 
@@ -70,12 +70,12 @@ def test_module_entry_point_runs():
     assert "--fuse" in result.stdout
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_packaging.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'audio_to_text'`
 
-- [ ] **Step 3: Move the sources into a package**
+- [x] **Step 3: Move the sources into a package**
 
 ```bash
 mkdir -p src/audio_to_text
@@ -89,7 +89,7 @@ Create `src/audio_to_text/__init__.py`:
 """Speaker-attributed transcription of audio and video on Apple Silicon."""
 ```
 
-- [ ] **Step 4: Make the project installable**
+- [x] **Step 4: Make the project installable**
 
 Append to `pyproject.toml`:
 
@@ -107,7 +107,7 @@ packages = ["src/audio_to_text"]
 
 `[build-system]` is load-bearing: without it uv treats this as a virtual project and never installs it onto the venv's import path, so `python -m audio_to_text.transcribe` cannot resolve. `[project.scripts]` is not what the PATH wrapper calls, but it is free here and makes `uv run audio-to-text` work during development.
 
-- [ ] **Step 5: Fix fusion.py's import**
+- [x] **Step 5: Fix fusion.py's import**
 
 In `src/audio_to_text/fusion.py:17`, change `from src.transcribe import (` to:
 
@@ -117,7 +117,7 @@ from audio_to_text.transcribe import (
 
 Leave the nine imported names unchanged.
 
-- [ ] **Step 6: Delete the sys.path hack, keep the deferred import**
+- [x] **Step 6: Delete the sys.path hack, keep the deferred import**
 
 In `src/audio_to_text/transcribe.py`, replace lines 465-470 — currently:
 
@@ -141,7 +141,7 @@ with:
 
 **This import must stay inside `main()`.** The original comment blamed `sys.path` only; the cycle is the other, permanent reason. Hoisting it crashes on import.
 
-- [ ] **Step 7: Re-point the test imports and patch targets**
+- [x] **Step 7: Re-point the test imports and patch targets**
 
 There are more references than a skim suggests: `tests/test_fusion.py` imports the module at lines 6, **92 (mid-file)** and **195 (inside a function)**, and `tests/test_transcribe.py` has five *string* patch targets that no import-statement search would find. Use sed so none are missed:
 
@@ -165,28 +165,36 @@ That covers, specifically:
 | `test_fusion.py:6,92` | `from src.fusion import ...` |
 | `test_fusion.py:195` | `from src import fusion` |
 
+**Found during execution — the sed above is not sufficient.** Two more things the plan missed:
+
+1. A *third* import idiom, `import src.transcribe as t`, appears **8 times** in `test_transcribe.py` (lines 258, 295, 359, 377, 398, 421, 453, 478). Add:
+   `-e 's/import src\.transcribe as t/import audio_to_text.transcribe as t/'`
+2. `test_transcribe.py:498` — `test_fuse_direct_script_invocation_resolves_fusion_import` exists specifically to pin the `sys.path` hack that Step 6 deletes, and it invokes `src/transcribe.py` by path. Rewritten rather than deleted: the underlying risk (a deferred import failing at runtime) is still real, so it now runs `python -m audio_to_text.transcribe` and is renamed `test_fuse_module_invocation_resolves_fusion_import`. It also now runs from an empty cwd with `HOME` redirected, so that Task 2's `~/.config/audio-to-text/.env` fallback cannot accidentally satisfy the token lookup and defeat the assertion.
+
+Also update the usage examples in `transcribe.py`'s own module docstring (lines 10-25) — they reference `uv run python src/transcribe.py`.
+
 `patch("audio_to_text.fusion.run_fusion")` keeps working even though `main()` imports `run_fusion` inside the function body: the deferred import runs at call time and picks up the already-patched module attribute. Do not "fix" those tests to patch somewhere else.
 
 Then update the two module docstrings by hand — `tests/test_fusion.py:1` says `src/fusion.py` and `tests/test_transcribe.py:1` says `transcribe.py`; make them `audio_to_text/fusion.py` and `audio_to_text/transcribe.py`.
 
-- [ ] **Step 8: Re-sync the venv so the package is installed**
+- [x] **Step 8: Re-sync the venv so the package is installed**
 
 Run: `uv sync`
 Expected: uv installs the project itself into `.venv` (it did not before, because there was no build backend).
 
-- [ ] **Step 9: Run the full suite**
+- [x] **Step 9: Run the full suite**
 
 Run: `uv run pytest -v`
 Expected: PASS — all 40 pre-existing tests plus the 2 new packaging tests. Any failure here is a mis-edited import, not a real regression; fix the import.
 
-- [ ] **Step 10: Verify no stale references remain**
+- [x] **Step 10: Verify no stale references remain**
 
 Run: `grep -rn "src\.transcribe\|src\.fusion\|from src import\|src/transcribe\|src/fusion" src/ tests/`
 Expected: no matches. This pattern deliberately catches bare `src.transcribe` inside quoted patch targets, not just `import` lines — the earlier, narrower pattern missed five of them.
 
 `README.md` still holds stale `src/transcribe.py` paths at this point; Task 4 rewrites it.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add pyproject.toml src/audio_to_text tests/test_transcribe.py tests/test_fusion.py tests/test_packaging.py

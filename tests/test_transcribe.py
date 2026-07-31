@@ -3,15 +3,15 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
-from src.transcribe import align_words_to_speakers
-from src.transcribe import (
+from audio_to_text.transcribe import align_words_to_speakers
+from audio_to_text.transcribe import (
     _group_consecutive,
     group_into_turns,
     relabel_speakers,
     render_markdown,
 )
-from src.transcribe import build_ffmpeg_args
-from src.transcribe import extract_words, run_whisper
+from audio_to_text.transcribe import build_ffmpeg_args
+from audio_to_text.transcribe import extract_words, run_whisper
 
 
 def test_align_words_to_speakers_assigns_by_max_overlap():
@@ -109,7 +109,7 @@ def test_render_markdown_formats_heading_and_timestamp():
 
 
 def test_render_markdown_clamps_negative_timestamp_to_zero():
-    """_shift_and_remap (src/fusion.py) clips negative starts to 0.0, but this is a
+    """_shift_and_remap (audio_to_text/fusion.py) clips negative starts to 0.0, but this is a
     defensive belt-and-braces check: negative seconds must never render as the
     divmod-garbage hh:mm:ss a naive negative int() would produce (e.g. -1:59:59)."""
     turns = [{"speaker": "Person 1", "start": -2.5, "text": "should clamp to zero"}]
@@ -141,7 +141,7 @@ def test_run_whisper_requests_word_timestamps_by_default(tmp_path):
     media.write_bytes(b"fake wav bytes")
     fake_result = {"text": "hi", "segments": [], "language": "en"}
 
-    with patch("src.transcribe.mlx_whisper.transcribe", return_value=fake_result) as mock_transcribe:
+    with patch("audio_to_text.transcribe.mlx_whisper.transcribe", return_value=fake_result) as mock_transcribe:
         result = run_whisper(media, model_repo="mlx-community/whisper-large-v3-turbo")
 
     assert result == fake_result
@@ -152,7 +152,7 @@ def test_run_whisper_word_timestamps_can_be_disabled(tmp_path):
     media = tmp_path / "clip.wav"
     media.write_bytes(b"fake wav bytes")
 
-    with patch("src.transcribe.mlx_whisper.transcribe", return_value={}) as mock_transcribe:
+    with patch("audio_to_text.transcribe.mlx_whisper.transcribe", return_value={}) as mock_transcribe:
         run_whisper(media, model_repo="turbo", word_timestamps=False)
 
     assert mock_transcribe.call_args.kwargs["word_timestamps"] is False
@@ -178,7 +178,7 @@ def test_extract_words_flattens_segments_in_order():
 import numpy as np
 import pytest
 
-from src.transcribe import load_diarization_pipeline, run_diarization
+from audio_to_text.transcribe import load_diarization_pipeline, run_diarization
 
 
 class _FakeTurn:
@@ -255,7 +255,7 @@ def test_main_continues_batch_after_diarization_failure(tmp_path, capsys):
     Mirrors the existing FileNotFoundError/CalledProcessError per-file resilience:
     the failing file is counted and skipped, the next file still gets written.
     """
-    import src.transcribe as t
+    import audio_to_text.transcribe as t
 
     media_files = [Path("fake1.m4a"), Path("fake2.m4a")]
     fake_result = {
@@ -292,7 +292,7 @@ def test_main_continues_batch_after_diarization_failure(tmp_path, capsys):
 def _run_main_capturing_audio_filter(argv, tmp_path):
     """Drive main()'s batch path with everything heavy mocked, returning the
     audio_filter value it passed to preprocess_audio."""
-    import src.transcribe as t
+    import audio_to_text.transcribe as t
 
     seen = {}
     fake_result = {
@@ -356,7 +356,7 @@ def test_main_fuse_reports_clean_error_on_missing_media_file(tmp_path, capsys):
     """--fuse must fail cleanly, before running any pipeline, if the primary media
     file doesn't exist. This is a real (unmocked) pre-flight check -- run_fusion
     is never reached, so there's nothing to mock."""
-    import src.transcribe as t
+    import audio_to_text.transcribe as t
 
     missing_primary = tmp_path / "primary.m4a"  # deliberately not created
     secondary = tmp_path / "secondary.m4a"
@@ -374,7 +374,7 @@ def test_main_fuse_reports_clean_error_on_missing_media_file(tmp_path, capsys):
 
 def test_main_fuse_reports_clean_error_on_missing_fuse_file(tmp_path, capsys):
     """Same pre-flight existence check, for the secondary (--fuse) file."""
-    import src.transcribe as t
+    import audio_to_text.transcribe as t
 
     primary = tmp_path / "primary.m4a"
     primary.touch()
@@ -395,7 +395,7 @@ def test_main_fuse_reports_clean_error_when_ffmpeg_missing(tmp_path, capsys):
     that produces a FileNotFoundError from run_fusion/preprocess_audio -- a plain
     missing source file is caught earlier by the pre-flight existence check above,
     before run_fusion is ever called)."""
-    import src.transcribe as t
+    import audio_to_text.transcribe as t
 
     primary = tmp_path / "primary.m4a"
     primary.touch()
@@ -406,7 +406,7 @@ def test_main_fuse_reports_clean_error_when_ffmpeg_missing(tmp_path, capsys):
          patch.object(t, "gather_media", return_value=[primary]), \
          patch.object(t, "load_dotenv"), \
          patch.object(t, "load_diarization_pipeline", return_value=object()), \
-         patch("src.fusion.run_fusion",
+         patch("audio_to_text.fusion.run_fusion",
                side_effect=FileNotFoundError("ffmpeg not found on PATH; cannot extract audio.")):
         exit_code = t.main([
             str(primary), "--fuse", str(secondary), "--output-dir", str(tmp_path),
@@ -418,7 +418,7 @@ def test_main_fuse_reports_clean_error_when_ffmpeg_missing(tmp_path, capsys):
 
 def test_main_fuse_reports_clean_error_on_ffmpeg_failure(tmp_path, capsys):
     """--fuse must fail cleanly if ffmpeg preprocessing fails for either source."""
-    import src.transcribe as t
+    import audio_to_text.transcribe as t
 
     primary = tmp_path / "primary.m4a"
     primary.touch()
@@ -433,7 +433,7 @@ def test_main_fuse_reports_clean_error_on_ffmpeg_failure(tmp_path, capsys):
          patch.object(t, "gather_media", return_value=[primary]), \
          patch.object(t, "load_dotenv"), \
          patch.object(t, "load_diarization_pipeline", return_value=object()), \
-         patch("src.fusion.run_fusion", side_effect=ffmpeg_error):
+         patch("audio_to_text.fusion.run_fusion", side_effect=ffmpeg_error):
         exit_code = t.main([
             str(primary), "--fuse", str(secondary), "--output-dir", str(tmp_path),
         ])
@@ -450,7 +450,7 @@ def test_main_fuse_reports_clean_error_on_speaker_count_mismatch(tmp_path, capsy
     without --num-speakers. Before this fix this reached main() as an unhandled
     traceback after both sources' full ASR + diarization passes had already run;
     it must instead print a clean error and return 1."""
-    import src.transcribe as t
+    import audio_to_text.transcribe as t
 
     primary = tmp_path / "primary.m4a"
     primary.touch()
@@ -461,7 +461,7 @@ def test_main_fuse_reports_clean_error_on_speaker_count_mismatch(tmp_path, capsy
          patch.object(t, "gather_media", return_value=[primary]), \
          patch.object(t, "load_dotenv"), \
          patch.object(t, "load_diarization_pipeline", return_value=object()), \
-         patch("src.fusion.run_fusion",
+         patch("audio_to_text.fusion.run_fusion",
                side_effect=ValueError("len(embeddings_a) != len(embeddings_b): 6 vs 5")):
         exit_code = t.main([
             str(primary), "--fuse", str(secondary), "--output-dir", str(tmp_path),
@@ -475,7 +475,7 @@ def test_main_fuse_reports_clean_error_when_diarization_pipeline_fails_to_load(t
     """load_diarization_pipeline's own clear RuntimeError (missing/invalid HF_TOKEN,
     gated model terms not accepted) must surface as a clean error+return 1 in the
     --fuse path too, not an unhandled traceback."""
-    import src.transcribe as t
+    import audio_to_text.transcribe as t
 
     primary = tmp_path / "primary.m4a"
     primary.touch()
@@ -495,32 +495,34 @@ def test_main_fuse_reports_clean_error_when_diarization_pipeline_fails_to_load(t
     assert "error: HF_TOKEN is not set" in capsys.readouterr().err
 
 
-def test_fuse_direct_script_invocation_resolves_fusion_import():
-    """Regression: `uv run python src/transcribe.py ... --fuse ...` (the documented,
-    real invocation) previously crashed with `ModuleNotFoundError: No module named
-    'src'`, because running transcribe.py directly (not `-m src.transcribe`) only
-    puts src/ itself on sys.path, not the project root, and main()'s --fuse branch
-    does `from src.fusion import run_fusion`.
+def test_fuse_module_invocation_resolves_fusion_import(tmp_path):
+    """Regression: main()'s --fuse branch imports run_fusion lazily, inside the
+    function body. That import is deferred because fusion.py imports nine names
+    from transcribe.py at module level, so a top-level import here would be a
+    circular import -- but a deferred import also defers its failure to runtime,
+    after both sources' ASR passes would normally have run.
 
-    This runs the real script as a subprocess (not an in-process import), so it is
-    actually sensitive to sys.path rather than just sys.modules caching -- an
-    in-process test that monkeypatches __package__ would still succeed via the
-    already-imported src.fusion module regardless of whether the fix is present.
-    HF_TOKEN is deliberately cleared so the run fails fast (no network/model
-    download) at load_diarization_pipeline's own clean RuntimeError -- proving
-    execution got past the import line without a ModuleNotFoundError.
+    This runs the real entry point as a subprocess (not an in-process import), so
+    it is actually sensitive to import resolution rather than to sys.modules
+    caching -- an in-process test would succeed via the already-imported
+    audio_to_text.fusion module regardless of whether the import line is correct.
+
+    Runs from an empty cwd with HOME redirected, so no .env on this machine can
+    satisfy the token lookup; the run then fails fast at
+    load_diarization_pipeline's own clean RuntimeError (no network, no model
+    download), proving execution got past the import line.
     """
     import os
     import sys
 
     repo_root = Path(__file__).resolve().parent.parent
     primary = repo_root / "tests" / "__init__.py"  # any real, harmless file
-    env = {**os.environ, "HF_TOKEN": ""}
+    env = {**os.environ, "HF_TOKEN": "", "HOME": str(tmp_path)}
 
     result = subprocess.run(
-        [sys.executable, str(repo_root / "src" / "transcribe.py"),
+        [sys.executable, "-m", "audio_to_text.transcribe",
          str(primary), "--fuse", str(primary)],
-        cwd=repo_root, env=env, capture_output=True, text=True, timeout=60,
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60,
     )
 
     assert "ModuleNotFoundError" not in result.stderr

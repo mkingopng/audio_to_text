@@ -1,9 +1,9 @@
-"""Unit tests for src/fusion.py -- dual-source sync, speaker matching, turn merging."""
+"""Unit tests for audio_to_text/fusion.py -- dual-source sync, speaker matching, turn merging."""
 import pytest
 import numpy as np
 from scipy.io import wavfile
 
-from src.fusion import find_offset, match_speakers
+from audio_to_text.fusion import find_offset, match_speakers
 
 
 def test_find_offset_recovers_known_delay(tmp_path):
@@ -89,7 +89,7 @@ def test_match_speakers_raises_on_mismatched_sizes():
         match_speakers(embeddings_a, embeddings_b)
 
 
-from src.fusion import _shift_and_remap, merge_turns
+from audio_to_text.fusion import _shift_and_remap, merge_turns
 
 
 def test_shift_and_remap_applies_offset_and_speaker_map():
@@ -192,7 +192,7 @@ def test_run_fusion_uses_separate_tmp_dirs_for_each_source(tmp_path, monkeypatch
     same shared tmp_dir, the second ffmpeg run would silently overwrite the
     first's WAV -- corrupting find_offset into comparing a file against itself
     and returning a plausible-looking but meaningless 0.0 offset."""
-    from src import fusion
+    from audio_to_text import fusion
 
     seen_dirs = []
 
