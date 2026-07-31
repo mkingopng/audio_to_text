@@ -1,188 +1,227 @@
 # Known issues / deferred findings
 
-Bugs and limitations noticed during development but deliberately not fixed, with
-the reasoning. Each is a conscious deferral, not an oversight.
+Bugs and limitations noticed during development, with the reasoning. Each entry is
+either **CLOSED** with the commit that fixed it and the test that pins it, or **OPEN**
+with a measured status.
 
-> **2026-07-31 — all three original entries were re-triaged against measured data**
-> (`docs/validate/2026-07-31-bugs-md-triage.md`). None survived its recorded reasoning
-> unchanged, and three further defects were found that had never been logged. Reproduce
-> any number below with `uv run python tools/analyze_transcript.py <transcript.md>`.
+> **2026-07-31 — all seven entries were worked through and re-measured.**
+> The prior triage (`docs/validate/2026-07-31-bugs-md-triage.md`) remains the narrative
+> record, but its `scratchpad/` no longer exists, so none of its *derived* numbers
+> (branch attribution z=+4.4, guard yield 6/23, "113 wrong timestamps") could be
+> reproduced. Everything below was re-measured from scratch against
+> the shipped reference output and a **fresh capture of the real 70-minute pair**.
+> Where a number here disagrees with the prior triage, the disagreement is stated.
+>
+> Reproduce with:
+> ```bash
+> uv run python tools/analyze_transcript.py <transcript.md>   # transcript-level
+> uv run python tools/capture_fusion_intermediates.py         # re-run + persist (slow)
+> uv run python tools/measure_containment_guard.py            # guard yield
+> uv run python tools/measure_smoothing.py                    # micro-turn candidates
+> uv run python tools/measure_offset_confidence.py            # offset null controls
+> uv run python tools/analyze_cross_speaker.py                # cross-speaker causes
+> ```
 
-## Fusion: residual redundancy when one B turn spans two A turns
+---
 
-**Status:** open — mechanism confirmed, **severity and scale were understated**
-**Found:** 2026-07-31, `/review` of the speaker-diarization-fusion feature
-**Re-triaged:** 2026-07-31 against the 714-block reference output
+## CLOSED — `merge_turns` corrupted turn timestamps when B's text won
 
-`merge_turns` (`src/fusion.py`) selects text at whole-turn granularity. When the
-secondary source's diarization produces one long turn spanning two of the primary
-source's turns, the winning B turn's text may include content that also appears in
-the *next* A turn, which is emitted separately.
+**Fixed:** `dfa7136` · **Severity:** correctness
 
-The exact-duplicate case (identical text under two headings) was fixed via the
-`used_b_ids` set. That fix eliminated *exact* duplication and left **containment**
-duplication: B's spanning text still contains what the sibling A turn says, and the
-sibling is emitted unchanged.
+The confidence-replacement branch emitted B's **text** under A's **start/end**, so a
+merged turn's timestamps described different speech than its words. The reference output
+contains a 93-word block with a 0.4 s duration, and 113 turns rendered a visibly wrong
+`mm:ss` heading.
 
-**Corrections to the original entry:**
+A merged turn is now B's turn outright when B's text wins.
 
-- **"Observed once in ~70 minutes" → 16 same-speaker instances** (26 including
-  cross-speaker), with shared spans up to 325 characters — whole paragraphs restated.
-  The original count came from a scan of *adjacent* blocks, which is structurally
-  blind to this bug: `_group_consecutive` flushes on every speaker change, so two
-  same-speaker turns are never adjacent. Scanning at block distances 1–5 finds them.
-- **"Cosmetic" → true only for the same-speaker cases.** 10 cross-speaker duplicates
-  place a paragraph under a person who did not say it. That is a correctness defect.
-- **The prescribed fix was wrong.** Branch attribution (origin-tagging every merged
-  turn, permutation-tested against base rate at z = +4.4) shows **31 of 35 redundant
-  pairs come from the confidence-replacement branch**, only 4 from gap-fill.
-- **A real fix does not need per-word splicing.** A containment guard on the
-  replacement branch suffices — but it must use strict full containment (a looser
-  similarity criterion destroys 840 characters of non-duplicated transcript), must be
-  same-speaker-only (otherwise it deletes the correctly-attributed copy), and must
-  search at A-index radius ≥ 2 (at radius 1 it fires on zero same-speaker cases).
-  Measured lossless yield: 6 of 23 pairs.
+*Mechanism confirmed exactly, not statistically.* The rival explanation on record — that
+the impossible durations came from the gap-fill branch — is refuted by construction:
+gap-fill appends B's turn **wholesale**, so it cannot desynchronise text from timestamps.
+Only the replacement branch mixed the two.
 
-## Fusion: no confidence check on the cross-correlation offset peak
+Pinned by an invariant (`(start, end, text)` must all originate from one source turn)
+plus the user-visible symptom (no impossible speaking rate). Both failed before the fix:
+*"93 words in 0.4 s = 232 words/sec"*.
 
-**Status:** open — **not surfaced per run** (the recorded mitigation is out-of-band)
-**Found:** 2026-07-29, task-level review of `find_offset`
-**Re-triaged:** 2026-07-31
+## CLOSED — fusion redundancy when one B turn spans two A turns
 
-`find_offset` (`src/fusion.py`) returns the argmax lag with no measure of how
-peaked the correlation actually is. Two recordings that don't share enough
-acoustic content would still yield a confident-looking number.
+**Fixed:** `51f5bef` · **Severity:** cosmetic
 
-**Correction to the original entry.** "Mitigated by process — the workflow has a human
-sanity-check the offset" describes a one-off validation script (plan Task 12 Step 1),
-run once on the reference pair. `src/fusion.py` contains **zero** `print` statements and
-`run_fusion` never surfaces the offset, so every *future* run gets no visibility and no
-peak-quality signal. The mitigation does not protect subsequent runs.
+The earlier `used_b_ids` fix removed *exact* duplication and left **containment**
+duplication: B's spanning text still contained what the sibling A turn said, and the
+sibling was emitted again underneath — whole paragraphs restated under a second heading.
 
-**A usable metric exists and is cheap.** `peak / best_rival` (best correlation peak more
-than 5 s from the argmax), measured against five negative controls built from the same
-recordings:
+A same-speaker containment guard now consumes the sibling. Three constraints, each
+measured on the fresh capture and each independently mutation-tested:
+
+| constraint | why, measured |
+|---|---|
+| **radius ≥ 2** in A-index terms | `_group_consecutive` flushes on every speaker change, so two same-speaker A turns are *never* adjacent. **0** same-speaker fires at radius 1, **13** at radius 2 |
+| **same-speaker only** | an unrestricted guard fires on **28** cross-speaker cases, each time deleting the copy that may be the correctly attributed one |
+| **≥ 20 normalised chars** | fires are bimodal — ≤8 chars are micro-turns (`I`, `for`, `And`, `you know`, `Daniel`), ≥20 are restated content, and the gap between is empty |
+
+Full containment only, never a similarity threshold — a looser criterion consumes blocks
+that are only *partly* duplicated and deletes the remainder.
+
+**Measured effect:** 592 → 587 blocks; same-speaker redundant pairs **16 → 14**;
+cross-speaker unchanged at 16 (by design). 41 duplicate word occurrences removed, **zero
+word types lost from the document**, nothing added.
+
+## CLOSED — no confidence check on the cross-correlation offset peak
+
+**Fixed:** `3cb36ed`
+
+`find_offset` returned the argmax lag with no measure of how peaked the correlation was,
+and `run_fusion` never surfaced it — `src/fusion.py` contained zero `print` statements. A
+misaligned pair fused into a plausible-looking transcript with no signal.
+
+The recorded mitigation ("the workflow has a human sanity-check the offset") was a one-off
+validation script run once on one recording pair: a procedure, not a property of the tool.
+
+`run_fusion` now reports the offset and `peak/best_rival`, warning below 1.2. Re-derived
+against five negative controls built from the **same** two recordings, so any separation is
+attributable to alignment rather than recording character:
 
 | pair | peak/best_rival |
 |---|---|
 | true pair | **1.5162** |
-| A first half vs B second half | 1.0034 |
-| A second half vs B first half | 1.0026 |
+| A 1st half vs B 2nd half | 1.0050 |
+| A 2nd half vs B 1st half | 1.0019 |
 | A vs shuffled B | 1.0032 |
 | A vs reversed B | 1.0049 |
 | A vs gaussian noise | 1.0002 |
 
-Note `peak/median` (3.135 vs nulls to 2.094) and the z-score (3.69 vs 1.80) separate far
-less cleanly and should not be used. **Report and warn — do not gate:** the null floor is
-well characterised but the true-pair distribution is n = 1.
+`peak/median` (3.135 vs nulls to 2.098) and the z-score separate by less than 2× and were
+rejected. **Warn, never gate** — the null floor is well characterised but the true-pair
+distribution is n=1.
 
-## Whisper hallucination artifacts on ambiguous audio
+Validated end-to-end on 3-minute real slices the threshold was never tuned on: a correctly
+aligned pair scored **1.43** (silent, offset recovered as +0.0 s), a partially overlapping
+pair scored **1.19** (warned, offset +52.2 s — arithmetically correct for the cut).
 
-**Status:** **REOPENED** — incidence unquantified; the original deferral rested on a
-measurement that could not detect the problem
-**Found:** 2026-07-30, real-recording validation
-**Re-triaged:** 2026-07-31
+## CLOSED — a fused run silently overwrote a single-file transcript of the same primary
 
-Whisper occasionally emits degenerate word repetition on quiet or ambiguous passages.
-Not a fusion bug — both sources produce it independently.
+**Fixed:** `4b101dd`
 
-**Why the deferral is no longer justified as recorded.** The evidence for "rare" was a
-count of identical consecutive words *within a block*. But ~31% of blocks hold a single
-word (see fragmentation, below), so a repetition loop is shredded across dozens of blocks
-and no single block ever contains a repeat. The instrument could only see loops that
-fragmentation had not already scattered.
+Both modes named the output after the primary's stem, so transcribing `teams.mp4` and then
+fusing it wrote `teams.md` twice, the second run silently replacing the first.
 
-Re-measured doc-wide across block boundaries, on two ASR runs of the same audio:
+Fusion now writes **`<stem>.fused.md`**. Of the three defensible answers (suffix, a
+`--force` guard, or letting it overwrite) the suffix stops the collision by construction,
+needs no new CLI flag, and records which pipeline produced the transcript.
 
-```
-run 1: within-block 4+ repeats = 3    doc-wide: nothing notable
-run 2: within-block 4+ repeats = 13   doc-wide: 'lars' x183 across 34 blocks (17:45-18:01)
-```
+Verified end-to-end: a single-file run then a fused run of the same primary now leave both
+`teams.md` and `teams.fused.md` on disk.
 
-One run in two contains a **183-token hallucination loop** — a word appearing nowhere in
-the other run. Still upstream and still arguably out of scope to *fix*, but the incidence
-is **unknown**, not negligible, and it is bursty rather than diffuse. `tools/analyze_transcript.py`
-now runs both the within-block and doc-wide passes.
+## PARTLY CLOSED — micro-turn fragmentation
 
-## Output: ~31% of blocks are a single word (micro-turn fragmentation)
+**Improved:** `a4c3dc1` · ~23% of blocks still hold a single word
 
-**Status:** open, unlogged until 2026-07-31
-**Found:** 2026-07-31, measured triage
+Diarization emits very short turns (42 of 96 under 0.5 s on a sampled slice, p10 = 0.02 s);
+`_group_consecutive` faithfully starts a new block at each switch, so half the document's
+headings introduce fragments like `"So"`, `"the"`, `"it?"`.
 
-Of 714 blocks in the reference output, **220 (31%) hold one word** and **347 (49%) hold
-five or fewer**, together carrying 4.8% of the text. Half the document's
-`## Person N — mm:ss` headings introduce fragments like `"So"`, `"the"`, `"it?"`.
+Sandwiched ≤2-word, **exactly-zero-duration**, non-backchannel turns are now
+**re-attributed** into the surrounding speaker's sentence. **Re-attribution, not deletion**
+— every word survives; only the spurious heading goes. That matters because the
+discriminator is imperfect, so its failure mode must be a misattributed word rather than a
+missing one.
 
-**Cause is upstream of grouping.** pyannote emits **42 of 96 turns shorter than 0.5 s**
-(p10 = 0.02 s) on a sampled 4-minute slice; `align_words_to_speakers` assigns words to
-these micro-turns and `_group_consecutive` faithfully starts a new block at each switch.
-Present in the single-file path too (16% one-word), roughly doubled by fusion.
+**Measured:** 587 → 547 blocks (**6.8%**), words 13,797 → 13,797 — **zero lost, zero
+gained**. All 19 clean candidates were hand-checked with context and every one is a
+fragment stolen from the surrounding sentence (`the` inside "some of **the** other things",
+`be a` inside "going to **be a** new season"). Zero genuine turns among them.
 
-**Why not yet fixed.** A naive length threshold is destructive: 27% of short blocks are
-genuine backchannel (`yeah`, `mm-hmm`, `gotcha`), and absorbing one misattributes real
-speech. Duration alone is also unsafe — see timestamp corruption below. The most
-conservative rule tested (≤2 words **and** exact-zero duration **and** not a backchannel
-token) removes ~19–20% of blocks with zero hand-labelled genuine turns destroyed across
-two runs, but it must be re-measured after the timestamp-corruption fix, which perturbs
-block ordering.
+**Two corrections to the prior triage:**
 
-## Fusion: `merge_turns` corrupts turn timestamps when B's text wins
+- Its claimed yield was **19–20%** of blocks (132 of 684). Measured here the rule is
+  eligible on 20 blocks (3.4%) and reduces the document by **6.8%** — real, but roughly a
+  third of what was recorded.
+- Its stated limitation *"G2 carries a fixed English word list, so it will not generalise"*
+  overstates the list's role: on this run the word list excludes **zero** blocks. All 50
+  exclusions among sandwiched ≤2-word blocks come from the **duration** clause. The list is
+  untested insurance here, not load-bearing.
 
-**Status:** open, unlogged until 2026-07-31
-**Found:** 2026-07-31, while hand-labelling smoothing candidates
+**Still open:** the remaining one-word blocks are not sandwiched, or have non-zero
+duration. Going after them needs a real acoustic discriminator, not a longer word list.
 
-In the confidence-replacement branch (`src/fusion.py`), the merged turn keeps **A's**
-`start`/`end` while taking **B's** text:
+## OPEN — Whisper hallucination loops (upstream), now detected
 
-```python
-merged.append({**turn, "text": best_b["text"], "confidence": best_b["confidence"]})
-```
+**Detection added:** `ed8da41` · **incidence: 2 of 3 runs**
 
-When B's turn spans more speech than A's, the timestamps stop describing the text — the
-reference output contains a **93-word block with a 0.4 s duration**. Over 206 replaced
-turns: `start` differs from B's for 203 (max 42.6 s), `end` for 196 (max 84.8 s), and
-**113 render a visibly wrong mm:ss heading**.
+Whisper emits degenerate repetition on quiet or ambiguous passages. Upstream and not
+fixable here — but a run that hallucinates now says so instead of looking clean.
 
-Consequences: wrong rendered timestamps, and any duration-based downstream logic is
-unsafe on merged turns. **Not risk-free to fix** — `merge_turns` re-sorts by `start`, so
-correcting it moves 109 of 684 blocks and changes which blocks are adjacent.
+The original deferral rested on a blind instrument: it counted identical consecutive words
+*within a block*, but ~23–31% of blocks hold a single word, so a loop is shredded across
+dozens of blocks and no block ever contains a repeat. The scan is now **doc-wide**, across
+turn boundaries.
 
-## Fusion: 12 cross-speaker duplicate pairs, cause unmeasured
+| run | loops found |
+|---|---|
+| shipped reference | none |
+| prior triage run 2 | `lars` ×183 |
+| this capture | `paul` ×200, `whether` ×65 |
 
-**Status:** open, unlogged until 2026-07-31
-**Found:** 2026-07-31, measured triage
+Threshold 10, measured: across the 13,454 tokens of the reference transcript the longest
+*legitimate* consecutive run is **4** (`okay`, `yeah`, `easier` — natural emphasis).
+Warns only, never gates.
 
-Ten to twelve block pairs (run-dependent) carry near-identical text under **different**
-`Person` headings, three of them at an identical timestamp. Not addressed by the
-containment guard proposed for the redundancy bug above, which must be same-speaker-only.
+**Why still open:** the fix belongs in Whisper. Incidence is now known to be non-negligible
+and bursty rather than diffuse.
 
-**Cause is not established.** It may be speaker-attribution error (diarization or
-Hungarian-matching disagreement between sources), or genuine cross-talk that both
-microphones captured. Distinguishing the two requires listening to the recordings; no
-automated discriminator has been validated. Logged rather than guessed at.
+## OPEN — cross-speaker duplicate pairs (11, not 12) — **cause now established**
+
+**Analysis:** `78eee79`, `docs/validate/2026-07-31-cross-speaker-cause.md`
+
+Previously logged as *"cause unmeasured — may be attribution error or genuine cross-talk;
+distinguishing them requires listening to the recordings."* There is a structural
+discriminator that needs no listening, and it settles the question.
+
+`merge_turns` only replaces an A turn with a **same-speaker** B turn, and only gap-fills a
+B turn when **no** same-speaker A turn overlaps. So if the sources *agreed* on the speaker,
+B either replaces A's turn or is dropped — **agreement cannot emit two blocks**.
+
+Of 16 apparent pairs on the fresh capture:
+
+- **5 are not duplication at all** — they sit inside the `paul` ×200 hallucination span, and
+  degenerate text trivially "duplicates" itself between any two blocks. The honest count is
+  **11**.
+- **4** involve a gap-filled B turn → the two sources **disagreed** on the speaker (proven).
+- **7** are `a_replaced + a_kept` → source A's own diarization split one stretch of speech
+  across two clusters, and B's spanning turn covers both sides.
+
+**Cross-talk is refuted:** all 11 real pairs sit at **gap 0.0 s** between their spans — one
+stretch of speech rendered twice. Two speakers cannot both produce the same 46–126
+characters simultaneously.
+
+**Why not fixed:** both mechanisms need an arbiter deciding which source's speaker
+assignment to trust, and the Hungarian embedding match is already the best signal available
+— it is precisely what disagreed. Firing the containment guard here would delete the
+correctly attributed copy. Scope is now known: **11 pairs, ~1.9% of 587 blocks.**
+
+## OPEN — zero-duration B turns are always gap-filled
+
+**Found:** 2026-07-31, while testing micro-turn smoothing · **minor**
+
+`overlap_seconds` requires strictly positive overlap, and a zero-duration interval can
+never produce that. So a B turn with `start == end` never counts as overlapping a
+same-speaker A turn, and is appended as a gap-fill even when an A turn covers that instant —
+producing a duplicate one-word block.
+
+Not fixed: the fix (treating a zero-length interval as overlapping if it falls inside the
+other) is small but changes gap-fill behaviour, and it was found while verifying an
+unrelated change. Logged rather than folded in.
+
+---
 
 ## Note: transcript metrics carry run-to-run variance
 
-Whisper's temperature fallback makes ASR non-deterministic. Two runs over the same audio,
-reusing the same diarization, gave 684 vs 756 blocks (**11%**, or 6% after excising a
-hallucination span) and 23 vs 19 same-speaker redundant pairs (**17%**). Any single block
-or pair count above should be read as approximate. Effects that survive this: branch
-attribution (z = +4.4), the offset null-control separation, and the fragmentation shares.
+Whisper's temperature fallback makes ASR non-deterministic. Three runs over the same audio
+gave 714, 684/756, and 592 merged blocks. **Any single count above is approximate.**
 
-## Output: a fused run silently overwrites a single-file transcript of the same primary
-
-**Status:** open, minor — pre-existing, surfaced by the global-tool work
-**Found:** 2026-07-31, verifying the `audio-to-text` wrapper end-to-end
-
-Both modes name the output after the *primary* input's stem, so transcribing `teams.mp4`
-and then fusing `teams.mp4 --fuse phone.m4a` writes `teams.md` twice, the second silently
-replacing the first. Observed directly during verification: a single-file run produced
-`data/transcriptions/teams.md`, and the subsequent fused run overwrote it with no warning.
-
-Pre-existing behaviour, not introduced by the packaging change — but that change makes it
-easier to hit, because output now defaults to a per-project `data/transcriptions/` that
-accumulates across runs rather than a single `output/` folder the author was watching.
-
-Not fixed here: the packaging work deliberately did not touch output naming, and the right
-answer isn't obvious — a `.fused.md` suffix, a `--force` guard, and just letting it
-overwrite are all defensible. Needs a decision, not a patch.
+What survives the variance: the structural facts (same-speaker A turns are never adjacent;
+gap-fill cannot desynchronise timestamps; agreement cannot emit two blocks), the offset
+null-control separation (1.52 vs 1.000–1.005), and the losslessness of both fixes (zero
+word types lost, measured per-block).

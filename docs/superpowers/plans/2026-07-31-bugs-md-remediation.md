@@ -100,10 +100,10 @@ output's filename only, not the CLI argument surface.
 
 ## Task 8 — reconcile the record
 
-- [ ] 8.1 Rewrite `bugs.md`: each entry closed or logged, every number one I measured.
+- [x] 8.1 Rewrite `bugs.md`: each entry closed or logged, every number one I measured.
 - [ ] 8.2 Write up the re-measurement in `docs/validate/`, including where it corrects
       the prior triage.
-- [ ] 8.3 Full suite green; fused run driven end-to-end; before/after measured.
+- [x] 8.3 Full suite green; fused run driven end-to-end; before/after measured.
 
 ---
 
