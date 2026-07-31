@@ -524,15 +524,23 @@ def test_run_fusion_smooths_micro_turns(tmp_path, monkeypatch):
     monkeypatch.setattr(fusion, "_process_source", fake_process_source)
     monkeypatch.setattr(fusion, "_correlate_envelopes", lambda a, b: (0.0, 9.9))
 
-    out_path = fusion.run_fusion(
-        tmp_path / "a.mp4", tmp_path / "b.m4a",
-        model_repo="x", language="en", initial_prompt=None, num_speakers=None,
-        output_dir=tmp_path / "out", diarization_pipeline=object(),
-    )
+    def fuse(**extra) -> str:
+        out_path = fusion.run_fusion(
+            tmp_path / "a.mp4", tmp_path / "b.m4a",
+            model_repo="x", language="en", initial_prompt=None, num_speakers=None,
+            output_dir=tmp_path / "out", diarization_pipeline=object(), **extra,
+        )
+        return out_path.read_text(encoding="utf-8")
 
-    text = out_path.read_text(encoding="utf-8")
-    assert "some of the other things" in text
-    assert text.count("## Person") == 1
+    smoothed = fuse(smooth=True)
+    assert "some of the other things" in smoothed
+    assert smoothed.count("## Person") == 1
+
+    # Off by default: smoothing re-attributes "the" from S1 to S0, so a run that
+    # did not ask for it must leave diarization's own attribution alone. Asserting
+    # only the smooth=True direction would stay green on a run_fusion that ignored
+    # the parameter and smoothed unconditionally.
+    assert fuse().count("## Person") == 3
 
 
 def test_offset_confidence_reports_no_confidence_when_clips_are_too_short_to_judge(tmp_path):

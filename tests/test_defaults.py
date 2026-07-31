@@ -207,3 +207,83 @@ def test_main_warns_on_repetition_loop_in_the_single_file_path(monkeypatch, tmp_
     err = capsys.readouterr().err
     assert "repetition loop" in err.lower()
     assert "lars" in err.lower()
+
+
+def test_main_does_not_smooth_by_default_and_does_with_the_flag(monkeypatch, tmp_path):
+    """Pins the single-file WIRING of --smooth, both ways.
+
+    Testing smooth_micro_turns in isolation cannot catch a main() that hard-wires
+    smooth=True (the regression this test exists for) or one that drops the flag
+    on the floor. Both directions are asserted because only asserting the default
+    would stay green if --smooth were parsed and then ignored.
+    """
+    import audio_to_text.transcribe as t
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "meeting.m4a").touch()
+
+    fake_result = {
+        "segments": [
+            {"words": [{"word": "hi", "start": 0.0, "end": 0.5, "probability": 0.9}]},
+        ],
+    }
+    seen: list[bool] = []
+    real_group = t.group_into_turns
+
+    def spy_group(aligned_words, *, smooth=False):
+        seen.append(smooth)
+        return real_group(aligned_words, smooth=smooth)
+
+    def run(argv):
+        with monkeypatch.context() as m:
+            m.setattr(t, "ensure_apple_silicon", lambda: None)
+            m.setattr(t, "resolve_hf_token", lambda: "fake-token")
+            m.setattr(t, "load_diarization_pipeline", lambda token: object())
+            m.setattr(t, "preprocess_audio", lambda media_path, tmp_dir, audio_filter: media_path)
+            m.setattr(t, "run_whisper", lambda *a, **k: fake_result)
+            m.setattr(
+                t, "run_diarization",
+                lambda source, pipeline, *, num_speakers=None: (
+                    [{"start": 0.0, "end": 1.0, "speaker": "SPEAKER_00"}], {}
+                ),
+            )
+            m.setattr(t, "group_into_turns", spy_group)
+            assert t.main(argv) == 0
+
+    run([])
+    run(["--smooth"])
+
+    assert seen == [False, True]
+
+
+def test_main_fuse_passes_smooth_through_to_run_fusion(monkeypatch, tmp_path):
+    """The fusion path has its own smoothing call site, which the single-file
+    test above never reaches -- deleting `smooth=args.smooth` from the run_fusion
+    call left that path silently smoothing on every run.
+    """
+    import audio_to_text.transcribe as t
+
+    monkeypatch.chdir(tmp_path)
+    primary = tmp_path / "teams.mp4"
+    primary.touch()
+    secondary = tmp_path / "phone.m4a"
+    secondary.touch()
+
+    seen: list[object] = []
+
+    def fake_run_fusion(a, b, **kwargs):
+        seen.append(kwargs.get("smooth", "ABSENT"))
+        out = kwargs["output_dir"] / "teams.fused.md"
+        out.write_text("x")
+        return out
+
+    monkeypatch.setattr(t, "ensure_apple_silicon", lambda: None)
+    monkeypatch.setattr(t, "resolve_hf_token", lambda: "fake-token")
+    monkeypatch.setattr(t, "load_diarization_pipeline", lambda token: object())
+    monkeypatch.setattr("audio_to_text.fusion.run_fusion", fake_run_fusion)
+
+    assert t.main([str(primary), "--fuse", str(secondary)]) == 0
+    assert t.main([str(primary), "--fuse", str(secondary), "--smooth"]) == 0
+
+    assert seen == [False, True]

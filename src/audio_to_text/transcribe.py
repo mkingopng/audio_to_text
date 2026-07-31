@@ -493,9 +493,20 @@ def smooth_micro_turns(turns: list[dict]) -> list[dict]:
     return smoothed
 
 
-def group_into_turns(aligned_words: list[dict]) -> list[dict]:
-    """Single-file convenience entry point: group, smooth jitter, relabel to Person N."""
-    return relabel_speakers(smooth_micro_turns(_group_consecutive(aligned_words)))
+def group_into_turns(aligned_words: list[dict], *, smooth: bool = False) -> list[dict]:
+    """Single-file convenience entry point: group, optionally smooth jitter, relabel.
+
+    smooth defaults to False because smooth_micro_turns RE-ATTRIBUTES words from
+    one speaker to another. Every other step here either preserves diarization's
+    attribution or improves it against measured evidence; this one overrides it
+    on a discriminator (zero duration + <=2 words + not backchannel) that was
+    hand-checked on one meeting. That earns an opt-in, not a default -- a wrong
+    absorption puts words in someone else's mouth, silently.
+    """
+    grouped = _group_consecutive(aligned_words)
+    if smooth:
+        grouped = smooth_micro_turns(grouped)
+    return relabel_speakers(grouped)
 
 
 def _format_timestamp(seconds: float) -> str:
@@ -728,6 +739,15 @@ def main(argv: list[str] | None = None) -> int:
              "different position). Triggers dual-source fusion: 'media' must be a "
              "single file, not a directory.",
     )
+    parser.add_argument(
+        "--smooth",
+        action="store_true",
+        help="Re-attribute one- and two-word zero-duration fragments into the "
+             "surrounding sentence. Cuts the ~quarter of blocks holding a single "
+             "word, at the risk of putting a genuine short turn under the wrong "
+             "speaker. Off by default: it is the only option here that can change "
+             "who a word is attributed to.",
+    )
     args = parser.parse_args(argv)
 
     ensure_apple_silicon()
@@ -777,6 +797,7 @@ def main(argv: list[str] | None = None) -> int:
                 num_speakers=args.num_speakers,
                 output_dir=output_dir,
                 diarization_pipeline=diarization_pipeline,
+                smooth=args.smooth,
             )
         except FileNotFoundError as exc:
             print(f"error: {exc}", file=sys.stderr)
@@ -837,7 +858,7 @@ def main(argv: list[str] | None = None) -> int:
                         source, diarization_pipeline, num_speakers=args.num_speakers
                     )
                     aligned_words = align_words_to_speakers(extract_words(result), turns)
-                    speaker_turns = group_into_turns(aligned_words)
+                    speaker_turns = group_into_turns(aligned_words, smooth=args.smooth)
                 except Exception as exc:
                     # Narrowly scoped to the diarization/alignment/grouping calls only
                     # (not the whole per-file try block) -- covers both

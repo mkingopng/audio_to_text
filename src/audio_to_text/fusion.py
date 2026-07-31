@@ -311,6 +311,7 @@ def run_fusion(
     num_speakers: int | None,
     output_dir: Path,
     diarization_pipeline,
+    smooth: bool = False,
 ) -> Path:
     """Fuse two recordings of the same meeting into one Person-N Markdown transcript."""
     import tempfile
@@ -356,7 +357,9 @@ def run_fusion(
         turns_b_shifted = _shift_and_remap(turns_b, offset, speaker_map_b_to_a)
 
         merged = merge_turns(turns_a, turns_b_shifted)
-        speaker_turns = relabel_speakers(smooth_micro_turns(merged))
+        if smooth:
+            merged = smooth_micro_turns(merged)
+        speaker_turns = relabel_speakers(merged)
         # Both sources produce hallucination loops independently, so fusion can
         # carry one through from whichever source won the turn.
         warn_on_repetition_loops(speaker_turns)

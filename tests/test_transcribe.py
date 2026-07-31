@@ -700,7 +700,12 @@ def test_smooth_micro_turns_never_moves_speech_across_a_speaker_boundary():
 
 
 def test_group_into_turns_smooths_micro_turns_in_the_single_file_path():
-    """Pins the single-file WIRING (main() routes through group_into_turns)."""
+    """Pins the single-file WIRING (main() routes through group_into_turns).
+
+    Opt-in: smoothing re-attributes words between speakers, so group_into_turns
+    only smooths when asked. test_group_into_turns_does_not_smooth_unless_asked
+    pins the other direction.
+    """
     from audio_to_text.transcribe import group_into_turns
 
     aligned = [
@@ -712,7 +717,7 @@ def test_group_into_turns_smooths_micro_turns_in_the_single_file_path():
         {"word": " things", "start": 3.0, "end": 4.0, "probability": 0.9, "speaker": "S0"},
     ]
 
-    turns = group_into_turns(aligned)
+    turns = group_into_turns(aligned, smooth=True)
 
     assert len(turns) == 1
     assert turns[0]["text"] == "some of the other things"
@@ -848,3 +853,40 @@ def test_smooth_micro_turns_keeps_the_least_confident_score_when_absorbing():
 
     assert len(result) == 1
     assert result[0]["confidence"] == 0.2
+
+
+def _jitter_fragment_words() -> list[dict]:
+    """Aligned words that group into a sandwiched, zero-duration, non-backchannel
+    fragment -- exactly what smooth_micro_turns absorbs. " so" has start == end,
+    which is the jitter signal; shortness alone is not.
+    """
+    return [
+        {"word": "Hi", "start": 0.0, "end": 1.0, "probability": 0.9, "speaker": "SPEAKER_00"},
+        {"word": " there", "start": 1.0, "end": 2.0, "probability": 0.9, "speaker": "SPEAKER_00"},
+        {"word": " so", "start": 2.0, "end": 2.0, "probability": 0.4, "speaker": "SPEAKER_01"},
+        {"word": " we", "start": 2.0, "end": 3.0, "probability": 0.9, "speaker": "SPEAKER_00"},
+        {"word": " continue", "start": 3.0, "end": 4.0, "probability": 0.9, "speaker": "SPEAKER_00"},
+    ]
+
+
+def test_group_into_turns_does_not_smooth_unless_asked():
+    """Smoothing RE-ATTRIBUTES words between speakers, so it must not fire on a
+    run that did not ask for it. It is the only change in this pipeline that can
+    put one person's word under another person's heading, and its discriminator
+    is admittedly imperfect -- so the default has to be the honest one, leaving
+    diarization's own attribution alone.
+    """
+    turns = group_into_turns(_jitter_fragment_words())
+
+    assert [t["speaker"] for t in turns] == ["Person 1", "Person 2", "Person 1"]
+    assert turns[1]["text"] == "so"
+
+
+def test_group_into_turns_smooths_when_asked():
+    """The opt-in path: same words, smooth=True, and the fragment rejoins its
+    sentence. Every word survives -- absorption moves words, never drops them.
+    """
+    turns = group_into_turns(_jitter_fragment_words(), smooth=True)
+
+    assert [t["speaker"] for t in turns] == ["Person 1"]
+    assert turns[0]["text"] == "Hi there so we continue"
