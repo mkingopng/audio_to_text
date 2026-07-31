@@ -62,13 +62,19 @@ location. Setup copies the existing `.env` to `~/.config/audio-to-text/.env`; th
 
 **Caller-relative defaults.**
 
-- Output directory defaults to `Path.cwd()` instead of `PROJECT_ROOT/output`.
-- Input defaults to `./data/` relative to cwd, and errors clearly when absent.
+- Output directory defaults to `./data/transcriptions/` relative to cwd, created if absent.
+  `PROJECT_ROOT/output` is dropped. `data/transcriptions/` is the standard project structure
+  here, so the transcript lands where it will ultimately live instead of being written to the
+  project root and moved by hand.
+- Input defaults to `./data/` relative to cwd and errors clearly when absent, though in
+  practice the source media will usually be named explicitly on the command line.
+- `--output-dir` still overrides.
 
-*Accepted consequence:* running from this repo's root now writes `.md` files to the repo root
-rather than `output/`. The development instructions in `README.md` gain an explicit
-`--output-dir output`. Rejected the alternative of detecting "am I inside my own checkout" —
-that is magic that would surprise later, and the explicit flag costs nothing.
+Nesting the output directory inside the default input directory is safe: `gather_media` uses
+`Path.iterdir()` with an `is_file()` filter (`src/transcribe.py:79-83`), so it is
+non-recursive and a later batch run will not descend into `data/transcriptions/`. A test pins
+this, because the safety is a property of `iterdir()` that a future switch to `rglob()` would
+silently destroy.
 
 `ensure_apple_silicon()` is unchanged. The constraint is real and the tool should keep failing
 fast on it.
@@ -113,7 +119,7 @@ The skill contains **no code** — only triggers and operating knowledge:
   of names and jargon.
 - **Run it in the background.** A one-hour meeting takes many minutes; Bash's 120 s default
   timeout would kill it partway. This trap is the single most valuable thing the skill encodes.
-- **Output location** and the handoff to the existing `meeting-minutes` skill.
+- **Output location** — `./data/transcriptions/` in the calling project.
 
 ## Repository split
 
@@ -141,8 +147,11 @@ Two additions:
   mechanical but must be verified green, not assumed.
 - New: token resolution chain — env beats cwd `.env` beats `~/.config`, and the failure message
   when all three miss.
-- New: output defaults to cwd, and `--output-dir` still overrides it.
+- New: output defaults to `./data/transcriptions/` relative to cwd, the directory is created
+  when absent, and `--output-dir` still overrides it.
 - New: default input resolves to `./data/` relative to cwd.
+- New: `gather_media` on a `data/` containing a `transcriptions/` subdirectory returns only the
+  media files — pins the non-recursive behaviour that keeps output nested inside input safe.
 - New: `python -m audio_to_text.transcribe --help` exits 0 — this is the entry path the
   wrapper actually uses, and a `pyproject.toml` packaging mistake would break it in a way no
   import-level unit test would catch.
@@ -151,8 +160,9 @@ Two additions:
 
 ## Out of scope
 
-- **Auto-chaining into `meeting-minutes`.** Keep the two skills composable; the transcript is a
-  useful artifact on its own.
+- **Any coupling to `meeting-minutes`.** That skill is entirely separate work. This tool's
+  deliverable is the transcript; what anything downstream does with it is not this tool's
+  concern and the skill must not mention it.
 - **An MCP server.** The operation runs for minutes, produces a file on disk rather than a chat
   payload, and is machine-local. MCP would re-encode a CLI across a protocol boundary for no
   gain, and its tool schemas consume context in every session whether used or not. A skill
@@ -164,8 +174,9 @@ Two additions:
 ## Done criteria
 
 1. `audio-to-text --help` runs from an arbitrary directory.
-2. From a different repo, a single file transcribes and the `.md` lands in that repo's cwd.
-3. From a different repo, `--fuse` produces a fused transcript.
+2. From a different repo, a single named file transcribes and the `.md` lands in that repo's
+   `data/transcriptions/`, which is created if it did not exist.
+3. From a different repo, `--fuse` produces a fused transcript in the same place.
 4. `HF_TOKEN` resolves from `~/.config/audio-to-text/.env` with no `.env` in cwd.
 5. `uv run pytest` passes in `audio_to_text`.
 6. The `transcribe-recording` skill triggers on a natural request in an unrelated project and
