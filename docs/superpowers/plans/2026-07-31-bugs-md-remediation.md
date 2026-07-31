@@ -91,11 +91,11 @@ output's filename only, not the CLI argument surface.
 
 ## Task 7 — cross-speaker duplicate pairs: establish cause or log it
 
-- [ ] 7.1 Trace each cross-speaker duplicate to its originating branch and source using
+- [x] 7.1 Trace each cross-speaker duplicate to its originating branch and source using
       the captured intermediates.
-- [ ] 7.2 Test the candidate discriminators (speaker-map disagreement vs genuine
+- [x] 7.2 Test the candidate discriminators (speaker-map disagreement vs genuine
       cross-talk), including whether each instrument could observe the alternative.
-- [ ] 7.3 Either fix with a test, or log in `bugs.md` with the cause established and the
+- [x] 7.3 Either fix with a test, or log in `bugs.md` with the cause established and the
       falsification that failed. Do not guess.
 
 ## Task 8 — reconcile the record
