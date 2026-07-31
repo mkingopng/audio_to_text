@@ -644,7 +644,7 @@ git commit -m "feat: default input to ./data and output to ./data/transcriptions
 - Consumes: `python -m audio_to_text.transcribe` from Task 1; `CONFIG_DIR` from Task 2; the `./data/transcriptions/` default from Task 3.
 - Produces: the `audio-to-text` command on `PATH`. Task 5's skill invokes exactly this name.
 
-- [ ] **Step 1: Write the wrapper**
+- [x] **Step 1: Write the wrapper**
 
 Create `~/.local/bin/audio-to-text` (`~/.local/bin` is already on `PATH`):
 
@@ -672,13 +672,13 @@ fi
 exec uv run --project "$REPO" python -m audio_to_text.transcribe "$@"
 ```
 
-- [ ] **Step 2: Make it executable**
+- [x] **Step 2: Make it executable**
 
 ```bash
 chmod +x ~/.local/bin/audio-to-text
 ```
 
-- [ ] **Step 3: Verify it resolves from an unrelated directory**
+- [x] **Step 3: Verify it resolves from an unrelated directory**
 
 ```bash
 cd /tmp && audio-to-text --help
@@ -686,7 +686,7 @@ cd /tmp && audio-to-text --help
 
 Expected: the argparse help, exit 0, including `--fuse` and the new `--output-dir` wording. If this prints a `ModuleNotFoundError`, Task 1's `[build-system]` did not take effect — run `uv sync` in the repo.
 
-- [ ] **Step 4: Verify cwd is the caller's, not the repo's**
+- [x] **Step 4: Verify cwd is the caller's, not the repo's**
 
 This is the assumption the whole design rests on — that `--project` does not chdir. Prove it rather than trusting it:
 
@@ -696,7 +696,7 @@ mkdir -p /tmp/atx-check && cd /tmp/atx-check && audio-to-text
 
 Expected: exit 1 with `error: no 'data/' directory in /tmp/atx-check`. The path in the message must be `/tmp/atx-check`, **not** the audio_to_text repo. If it names the repo, `--project` is chdir-ing and the wrapper needs rethinking — stop and report.
 
-- [ ] **Step 5: Verify token resolution from outside the repo**
+- [x] **Step 5: Verify token resolution from outside the repo**
 
 ```bash
 cd /tmp/atx-check && env -u HF_TOKEN audio-to-text --help >/dev/null && echo "wrapper ok"
@@ -704,7 +704,7 @@ cd /tmp/atx-check && env -u HF_TOKEN audio-to-text --help >/dev/null && echo "wr
 
 Expected: `wrapper ok`. (`--help` exits before the token is needed; the real end-to-end token check happens in the VERIFY phase with an actual recording.)
 
-- [ ] **Step 6: Update the README**
+- [x] **Step 6: Update the README**
 
 In `README.md`:
 
@@ -713,12 +713,12 @@ In `README.md`:
 - In **Usage**, replace the four `uv run python src/transcribe.py` invocations with `audio-to-text`, and state that transcripts default to `./data/transcriptions/` in the current directory.
 - In **Development**, keep `uv sync` / `uv run pytest`, and note that `uv run audio-to-text` runs the console script inside the repo.
 
-- [ ] **Step 7: Confirm the README has no stale paths**
+- [x] **Step 7: Confirm the README has no stale paths**
 
 Run: `grep -n "src/transcribe.py\|output/\|the project's .env" README.md`
 Expected: no matches.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add README.md

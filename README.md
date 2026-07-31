@@ -14,31 +14,74 @@ Two modes:
 
 - Apple Silicon Mac (MLX has no CPU fallback here — the tool exits if it isn't arm64 macOS)
 - `ffmpeg` on `PATH`
-- A Hugging Face token in `.env` as `HF_TOKEN=...`
+- A Hugging Face token, found in the first of these that has one:
+  1. the `HF_TOKEN` environment variable
+  2. `./.env` in the directory you run from — lets a project supply its own
+  3. `~/.config/audio-to-text/.env` — **use this one** to call the tool from other projects
 - Accepted model terms on huggingface.co for **all three** of these gated pyannote models —
   the first one pulls in the other two, so accepting only the first still fails:
   - [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
   - [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0)
   - [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
 
-## Usage
+## Install
 
-Every media file in `data/`, writing one `.md` per file to `output/`:
+The tool is callable from any project via a small wrapper on `PATH`. It delegates to this
+repo's own venv rather than installing a second copy of the ~1.2 GB of ML dependencies, so
+edits here take effect immediately with no reinstall step.
+
+Create `~/.local/bin/audio-to-text`:
 
 ```bash
-uv run python src/transcribe.py
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO="${AUDIO_TO_TEXT_REPO:-$HOME/Developer/GitHub/audio_to_text}"
+
+if [[ ! -d "$REPO" ]]; then
+  echo "audio-to-text: repo not found at '$REPO'." >&2
+  echo "Set AUDIO_TO_TEXT_REPO to point at your audio_to_text checkout." >&2
+  exit 1
+fi
+
+exec uv run --project "$REPO" python -m audio_to_text.transcribe "$@"
+```
+
+Then `chmod +x ~/.local/bin/audio-to-text`, and put the token where any project can find it:
+
+```bash
+mkdir -p ~/.config/audio-to-text
+cp .env ~/.config/audio-to-text/.env
+chmod 600 ~/.config/audio-to-text/.env
+```
+
+`uv run --project` deliberately does *not* change the working directory — that is what lets
+the `./data/transcriptions/` default resolve against the directory you called from. Don't
+swap it for `--directory`.
+
+The wrapper hard-codes this checkout's path, so moving or deleting the repo breaks the
+command until you set `AUDIO_TO_TEXT_REPO`.
+
+## Usage
+
+Paths and outputs are relative to wherever you run the command.
+
+Every media file in `./data/`, writing one `.md` per file to `./data/transcriptions/`:
+
+```bash
+audio-to-text
 ```
 
 A specific file, when you know how many people were in the room:
 
 ```bash
-uv run python src/transcribe.py "data/meeting.m4a" --num-speakers 6
+audio-to-text "data/meeting.m4a" --num-speakers 6
 ```
 
 Fuse two recordings of the same meeting:
 
 ```bash
-uv run python src/transcribe.py "data/meeting-video.mp4" \
+audio-to-text "data/meeting-video.mp4" \
   --fuse "data/phone-recording.m4a" \
   --num-speakers 6
 ```
@@ -46,10 +89,13 @@ uv run python src/transcribe.py "data/meeting-video.mp4" \
 Optional audio cleanup before transcription (off by default):
 
 ```bash
-uv run python src/transcribe.py --preprocess          # highpass + loudness normalization
-uv run python src/transcribe.py --denoise             # adds FFT noise reduction
-uv run python src/transcribe.py --audio-filter "..."  # your own ffmpeg -af chain
+audio-to-text --preprocess          # highpass + loudness normalization
+audio-to-text --denoise             # adds FFT noise reduction
+audio-to-text --audio-filter "..."  # your own ffmpeg -af chain
 ```
+
+Transcripts go to `./data/transcriptions/`, created if it doesn't exist. Override with
+`--output-dir`.
 
 Bias spelling of names and jargon with `--prompt "Crisis Shield, ZeroW, Margu"`.
 
@@ -104,5 +150,7 @@ recordings recovered about 160 turns that a naive time-overlap check discarded.
 uv sync
 uv run pytest
 ```
+
+Inside the repo, `uv run audio-to-text ...` runs the same entry point as the wrapper.
 
 See `bugs.md` for known limitations, `docs/superpowers/specs/` for design rationale.

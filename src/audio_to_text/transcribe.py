@@ -435,6 +435,9 @@ def ensure_apple_silicon() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
+        # Without this, `python -m audio_to_text.transcribe` reports itself as
+        # "transcribe.py" -- a name the user never types.
+        prog="audio-to-text",
         description="Transcribe audio or video files to text using Whisper on the Apple GPU (MLX).",
     )
     parser.add_argument(
