@@ -27,6 +27,7 @@ from audio_to_text.transcribe import (
     run_diarization,
     run_whisper,
     smooth_micro_turns,
+    warn_on_cross_speaker_duplicates,
     warn_on_repetition_loops,
 )
 
@@ -359,6 +360,8 @@ def run_fusion(
         # Both sources produce hallucination loops independently, so fusion can
         # carry one through from whichever source won the turn.
         warn_on_repetition_loops(speaker_turns)
+        # Only fusion can produce these: they need two diarizations to disagree.
+        warn_on_cross_speaker_duplicates(speaker_turns)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     # ".fused.md", not ".md": the single-file path also names its output after the

@@ -137,3 +137,25 @@ Two defects found in this branch's own work, neither present before it:
 - [x] 9.3 Verify all five tools run against the real capture and reproduce their numbers.
 
 Landed as `13817af`. No task was dropped or re-scoped.
+
+**2026-07-31 — Task 10 added, from the REVIEW pass (contrarian half). Verdict: FAIL.**
+17 of 21 mutations survived a clean re-run. The earlier mutation testing probed only the
+*deletion* axis; every calibrated constant was unpinned on the *relaxation* axis. Two real
+bugs surfaced with it.
+
+- [x] 10.1 Fix the containment guard's missing temporal constraint (deleted speech 20 min away).
+- [x] 10.2 Fix two-word backchannels bypassing `BACKCHANNEL_TOKENS`.
+- [x] 10.3 Move the loop warning out of the diarization try (it could abort a file).
+- [x] 10.4 Two-sided pins on every calibrated constant, anchored to measured literals —
+      three first attempts derived fixtures from the constant they pinned and caught nothing.
+- [x] 10.5 Exercise normalisation (case/punctuation) in the containment tests.
+- [x] 10.6 Remove the fabricated `non-dup chars` column; add `tools/verify_lossless.py`.
+- [x] 10.7 Make `analyze_cross_speaker.py` compute the gap it is cited for.
+- [x] 10.8 All 18 mutations re-run and caught.
+
+**Task 11 — cross-speaker duplicates upgraded from "logged" to "reported".**
+- [x] 11.1 `detect_cross_speaker_duplicates` + a warning listing the affected timestamps,
+      excluding hallucination spans. The attribution is still not auto-resolved, and the
+      reasoning for that is recorded in `bugs.md`.
+
+Landed as `5b91665` and the commit following it.

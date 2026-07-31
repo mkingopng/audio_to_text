@@ -722,3 +722,57 @@ def test_offset_confidence_test_tracks_the_shipped_threshold_and_measured_band()
         f"null ceiling ({measured_null_ceiling}) from the measured true pair "
         f"({measured_true_pair})"
     )
+
+
+def test_run_fusion_warns_about_cross_speaker_duplicate_attribution(tmp_path, monkeypatch, capsys):
+    """The remaining known defect is now VISIBLE rather than silent.
+
+    Near-identical text under two different speakers means one heading is wrong.
+    The two sources' diarizations disagreed and no arbiter here can settle it, so
+    the tool reports the timestamps instead of silently picking a copy -- picking
+    would turn an artifact a reader notices into a misattribution they do not.
+    """
+    from audio_to_text import fusion
+
+    shared = "the budget for the second quarter is exactly what we agreed on"
+
+    def fake_process_source(media_path, tmp_dir, **kwargs):
+        wav_path = tmp_dir / (media_path.stem + ".clean.wav")
+        wav_path.write_bytes(b"")
+        embeddings = {"S0": np.array([1.0, 0.0]), "S1": np.array([0.0, 1.0])}
+        if media_path.stem == "a":
+            turns = [{"speaker": "S0", "start": 0.0, "end": 9.0, "confidence": 0.9, "text": shared}]
+        else:
+            # source B heard the SAME words but attributed them to the other speaker
+            turns = [{"speaker": "S1", "start": 0.0, "end": 9.0, "confidence": 0.95, "text": shared}]
+        return wav_path, turns, embeddings
+
+    monkeypatch.setattr(fusion, "_process_source", fake_process_source)
+    monkeypatch.setattr(fusion, "_correlate_envelopes", lambda a, b: (0.0, 9.9))
+
+    fusion.run_fusion(
+        tmp_path / "a.mp4", tmp_path / "b.m4a",
+        model_repo="x", language="en", initial_prompt=None, num_speakers=None,
+        output_dir=tmp_path / "out", diarization_pipeline=object(),
+    )
+
+    err = capsys.readouterr().err
+    assert "two different speakers" in err
+    assert "Person 1 vs Person 2" in err
+
+
+def test_cross_speaker_duplicate_warning_ignores_hallucination_loops():
+    """Degenerate repeated text trivially "duplicates" itself between any two
+    blocks. On the real pair that accounted for 5 of 16 apparent pairs -- warning
+    on them would report a speaker problem where the actual fault is Whisper.
+    """
+    from audio_to_text.transcribe import detect_cross_speaker_duplicates
+
+    turns = [
+        {"speaker": "Person 1", "start": float(i), "end": float(i) + 0.1, "text": "Paul."}
+        for i in range(30)
+    ]
+    for i, turn in enumerate(turns):
+        turn["speaker"] = f"Person {1 + i % 3}"   # loop shredded across speakers
+
+    assert detect_cross_speaker_duplicates(turns) == []

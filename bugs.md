@@ -31,6 +31,14 @@ with a measured status.
 > Each analysis tool asserts its instrumented merge equals production `merge_turns`
 > on the same input before reporting anything — an instrument that disagrees with
 > what it measures is worthless.
+>
+> **Honest limits on reproducibility.** The capture itself is not committed (two ~135 MB
+> WAVs), and Whisper's temperature fallback means a fresh capture will not reproduce these
+> counts exactly — see the variance note at the end. What *is* reproducible is the method:
+> every figure quoted here is emitted by one of the scripts above rather than by an unsaved
+> heredoc, which is the specific failure that made the prior triage's numbers uncheckable.
+> Structural claims (0 same-speaker fires at radius 1; gap-fill cannot desynchronise
+> timestamps; agreement cannot emit two blocks) are exact and hold on any input.
 
 ---
 
@@ -181,7 +189,9 @@ Warns only, never gates.
 **Why still open:** the fix belongs in Whisper. Incidence is now known to be non-negligible
 and bursty rather than diffuse.
 
-## OPEN — cross-speaker duplicate pairs (11, not 12) — **cause now established**
+## PARTLY CLOSED — cross-speaker duplicate pairs (11, not 12)
+
+**Cause established** + **now reported to the user** rather than left silent.
 
 **Analysis:** `78eee79`, `docs/validate/2026-07-31-cross-speaker-cause.md`
 
@@ -206,10 +216,51 @@ Of 16 apparent pairs on the fresh capture:
 stretch of speech rendered twice. Two speakers cannot both produce the same 46–126
 characters simultaneously.
 
-**Why not fixed:** both mechanisms need an arbiter deciding which source's speaker
-assignment to trust, and the Hungarian embedding match is already the best signal available
-— it is precisely what disagreed. Firing the containment guard here would delete the
-correctly attributed copy. Scope is now known: **11 pairs, ~1.9% of 587 blocks.**
+**What was done.** A fused run now *warns*, listing the timestamps where two speakers carry
+near-identical text:
+
+```
+warning: 11 block pair(s) carry near-identical text under two different speakers, so
+one heading in each pair is wrong. ... Check the speaker labels at:
+  04:06  Person 1 vs Person 4 (55 shared characters)
+  14:12  Person 4 vs Person 1 (101 shared characters)
+  31:45  Person 1 vs Person 4 (126 shared characters)
+  ...
+```
+
+**Why the attribution itself is not auto-resolved.** It needs an arbiter deciding which
+source's diarization to trust, and the Hungarian embedding match is already the best signal
+available — it is precisely what disagreed. Silently picking one copy would convert a
+*visible* artifact (the same sentence under two names, which a reader notices) into a
+confident-looking misattribution (which they do not), and risks deleting the correctly
+attributed copy. Reporting is strictly better than guessing here.
+
+Blocks inside a repetition loop are excluded, or degenerate text would trivially match
+itself — that alone accounted for 5 of the 16 apparent pairs.
+
+Scope: **11 pairs, ~1.9% of 587 blocks**, all now flagged by timestamp.
+
+## CLOSED — the containment guard could delete speech minutes away
+
+**Fixed:** `5b91665` · found by the contrarian review of this branch's own work
+
+The guard matched on A-turn **index** adjacency and text alone. Indices say nothing about
+elapsed time, so a turn twenty minutes later can sit two indices away: 60 seconds of speech
+at t=1200 was deleted and its words reappeared under a heading stamped 0.1 s. That is the
+same "span and text describe different speech" defect the timestamp fix eliminated,
+re-entering through another door.
+
+The sibling must now be speech B's turn actually covers. Costs nothing on real data —
+identical 587 blocks, identical words, redundancy still 14.
+
+## CLOSED — two-word backchannels bypassed the guard protecting them
+
+**Fixed:** `5b91665`
+
+`"Yeah yeah"` was keyed as one string (`"yeahyeah"`), which is not in the token set — so the
+commonest two-word backchannels (`yeah yeah`, `no no`, `yeah okay`) were absorbed as jitter
+by the very rule whose word list exists to protect them. Checked per word now, with the
+hyphen preserved so `mm-hmm` and `uh-huh` stay protected too.
 
 ## OPEN — zero-duration B turns are always gap-filled
 

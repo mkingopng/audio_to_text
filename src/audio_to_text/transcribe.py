@@ -38,6 +38,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Iterable
+from difflib import SequenceMatcher
 from pathlib import Path
 
 import mlx_whisper
@@ -301,6 +302,89 @@ def detect_repetition_loops(
             })
         i = j + 1
     return loops
+
+
+# A shared span must be at least this long, and cover at least this share of the
+# shorter block, before two blocks count as near-duplicates. Matches the criterion
+# tools/analyze_transcript.py measures with, so the warning and the analysis agree.
+_DUPLICATE_MIN_SHARED_CHARS = 40
+_DUPLICATE_MIN_SHARE = 0.5
+# How far apart, in blocks, to look. Measured on the real pair: every cross-speaker
+# near-duplicate sits within 5.
+_DUPLICATE_MAX_DISTANCE = 5
+
+
+def detect_cross_speaker_duplicates(turns: list[dict]) -> list[dict]:
+    """Find near-identical text emitted under two DIFFERENT speaker headings.
+
+    One of the two headings is necessarily wrong: measured on the real pair, every
+    such pair sits at a gap of 0.0 s between its spans -- one stretch of speech
+    rendered twice -- and two speakers cannot both produce the same 40+ characters
+    simultaneously. The cause is the two sources' diarizations disagreeing about
+    who spoke, which no arbiter here can settle: the Hungarian embedding match is
+    already the best signal available and is precisely what disagreed.
+
+    So this reports rather than resolves. Silently picking one copy would turn a
+    visibly odd artifact -- the same sentence under two names, which a reader
+    notices -- into a confident-looking misattribution, which they do not. Deleting
+    the correctly attributed copy is a real risk and the guard in merge_turns
+    deliberately declines to take it.
+
+    Blocks inside a repetition loop are skipped: degenerate text trivially matches
+    itself, and on the real pair that accounted for 5 of 16 apparent pairs.
+    """
+    loops = detect_repetition_loops(turns)
+    def in_loop(turn: dict) -> bool:
+        return any(loop["start"] <= turn["start"] <= loop["end"] for loop in loops)
+
+    def normalize(text: str) -> str:
+        return re.sub(r"[^a-z0-9 ]", "", text.lower())
+
+    found = []
+    for distance in range(1, _DUPLICATE_MAX_DISTANCE + 1):
+        for index in range(len(turns) - distance):
+            first, second = turns[index], turns[index + distance]
+            if first["speaker"] == second["speaker"]:
+                continue
+            if in_loop(first) or in_loop(second):
+                continue
+            a, b = normalize(first["text"]), normalize(second["text"])
+            if not a or not b:
+                continue
+            shared = SequenceMatcher(None, a, b, autojunk=False).find_longest_match(
+                0, len(a), 0, len(b)
+            ).size
+            if shared > _DUPLICATE_MIN_SHARED_CHARS and shared > _DUPLICATE_MIN_SHARE * min(len(a), len(b)):
+                found.append({
+                    "speakers": (first["speaker"], second["speaker"]),
+                    "start": first["start"],
+                    "shared_chars": shared,
+                })
+    return found
+
+
+def warn_on_cross_speaker_duplicates(turns: list[dict]) -> None:
+    """Tell the user which timestamps carry an uncertain speaker attribution."""
+    duplicates = detect_cross_speaker_duplicates(turns)
+    if not duplicates:
+        return
+    print(
+        f"warning: {len(duplicates)} block pair(s) carry near-identical text under "
+        "two different speakers, so one heading in each pair is wrong. The two "
+        "recordings' diarizations disagreed about who spoke; this tool cannot tell "
+        "which is right, so both copies are kept rather than silently choosing. "
+        "Check the speaker labels at:",
+        file=sys.stderr,
+    )
+    for duplicate in sorted(duplicates, key=lambda d: d["start"])[:10]:
+        first, second = duplicate["speakers"]
+        print(
+            f"  {_format_timestamp(duplicate['start'])}  {first} vs {second} "
+            f"({duplicate['shared_chars']} shared characters)",
+            file=sys.stderr,
+        )
+    if len(duplicates) > 10:
+        print(f"  ... and {len(duplicates) - 10} more", file=sys.stderr)
 
 
 def warn_on_repetition_loops(turns: list[dict]) -> None:
