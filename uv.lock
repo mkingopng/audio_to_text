@@ -197,7 +197,7 @@ wheels = [
 [[package]]
 name = "audio-to-text"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "mlx-whisper" },
     { name = "pyannote-audio" },

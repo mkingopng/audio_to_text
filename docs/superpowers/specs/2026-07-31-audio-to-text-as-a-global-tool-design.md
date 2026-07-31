@@ -32,9 +32,17 @@ Three layers.
 This deletes the `sys.path` manipulation at `src/transcribe.py:465-469`, which exists *only*
 because `src` isn't a resolvable package when the file is run directly. Under `python -m
 audio_to_text.transcribe`, `__package__` is `"audio_to_text"`, so the guard's condition is
-already false — the block becomes dead code rather than merely unnecessary. The
-`from src.fusion import run_fusion` on line 470 becomes `from audio_to_text.fusion import
-run_fusion` and moves to the top of the module with the other imports.
+already false — the block becomes dead code rather than merely unnecessary.
+
+The `from src.fusion import run_fusion` on line 470 becomes `from audio_to_text.fusion import
+run_fusion` but **stays inside `main()`**. It cannot move to the top of the module:
+`fusion.py:17` imports nine names from `transcribe.py` at module level, so a top-level import
+in the other direction is a cycle that fails at import time. The deferred import is
+load-bearing for two reasons and only one of them is going away; the comment above it must be
+rewritten to say so, or the next reader will delete it as leftover.
+
+Breaking the cycle properly — extracting the nine shared helpers into a third module — is a
+real improvement but is not this change, and is left alone deliberately.
 
 **pyproject.** Add `[build-system]` (hatchling) and
 `[project.scripts] audio-to-text = "audio_to_text.transcribe:main"`.
