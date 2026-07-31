@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import platform
 import shutil
 import subprocess
@@ -329,9 +330,78 @@ def relabel_speakers(turns: list[dict]) -> list[dict]:
     return [{**turn, "speaker": _label_for(turn["speaker"])} for turn in turns]
 
 
+# Agreement tokens that are GENUINE one-word turns in a meeting, as opposed to
+# function words stolen out of a neighbour's sentence by diarization jitter. Of
+# the <=2-word blocks in the reference output, 27% are these -- so a length
+# threshold alone cannot separate the two populations.
+BACKCHANNEL_TOKENS = frozenset({
+    "yeah", "yep", "yes", "yup", "mm-hmm", "-hmm", "mhm", "uh-huh", "ok", "okay",
+    "no", "nope", "right", "sure", "correct", "exactly", "great", "cool", "thanks",
+})
+
+
+def _backchannel_key(text: str) -> str:
+    return re.sub(r"[^a-z-]", "", text.lower())
+
+
+def smooth_micro_turns(turns: list[dict]) -> list[dict]:
+    """Re-attribute one- and two-word jitter fragments back into the sentence they
+    were taken from.
+
+    pyannote emits very short turns (42 of 96 under 0.5 s on a sampled slice, p10
+    = 0.02 s); align_words_to_speakers assigns words to them and _group_consecutive
+    faithfully starts a new block at each switch. The result is that roughly a
+    quarter of blocks hold a single word, and half the document's headings
+    introduce fragments like "So", "the", "it?".
+
+    A fragment is absorbed only when ALL of these hold:
+
+      sandwiched   -- the same speaker on both sides, different from the fragment.
+                      Otherwise absorbing would move words between two people.
+      <= 2 words   -- longer blocks are not jitter.
+      zero duration - the actual jitter signal. Shortness alone is not: a short
+                      turn that occupies real time is someone speaking. (Duration
+                      < 0.5 s was measured and rejected -- it absorbs genuine
+                      turns, including a 93-word one.)
+      not backchannel - "yeah"/"mm-hmm" are real turns, see BACKCHANNEL_TOKENS.
+
+    RE-ATTRIBUTION, NOT DELETION: the fragment rejoins its sentence and no word is
+    ever lost. The discriminator is imperfect, so the failure mode must be a
+    misattributed word rather than a missing one. Every one of the 19 candidates
+    on the reference pair was hand-checked and all were jitter.
+    """
+    if not turns:
+        return []
+
+    smoothed = [dict(turns[0])]
+    index = 1
+    while index < len(turns):
+        turn = turns[index]
+        following = turns[index + 1] if index + 1 < len(turns) else None
+        preceding = smoothed[-1]
+        if (
+            following is not None
+            and preceding["speaker"] == following["speaker"] != turn["speaker"]
+            and len(turn["text"].split()) <= 2
+            and turn["end"] - turn["start"] == 0.0
+            and _backchannel_key(turn["text"]) not in BACKCHANNEL_TOKENS
+        ):
+            parts = [preceding["text"], turn["text"], following["text"]]
+            preceding["text"] = " ".join(part for part in parts if part)
+            preceding["end"] = following["end"]
+            preceding["confidence"] = min(
+                preceding["confidence"], turn["confidence"], following["confidence"]
+            )
+            index += 2
+            continue
+        smoothed.append(dict(turn))
+        index += 1
+    return smoothed
+
+
 def group_into_turns(aligned_words: list[dict]) -> list[dict]:
-    """Single-file convenience entry point: group, then relabel to Person N."""
-    return relabel_speakers(_group_consecutive(aligned_words))
+    """Single-file convenience entry point: group, smooth jitter, relabel to Person N."""
+    return relabel_speakers(smooth_micro_turns(_group_consecutive(aligned_words)))
 
 
 def _format_timestamp(seconds: float) -> str:

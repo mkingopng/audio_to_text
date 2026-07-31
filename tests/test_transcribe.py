@@ -604,3 +604,115 @@ def test_run_fusion_warns_when_the_transcript_contains_a_repetition_loop(tmp_pat
     err = capsys.readouterr().err
     assert "repetition" in err.lower()
     assert "lars" in err.lower()
+
+
+def test_smooth_micro_turns_reattributes_a_sandwiched_fragment_and_keeps_every_word():
+    """Diarization jitter steals a word or two out of one speaker's sentence and
+    emits it as its own block under another speaker -- ~23% of blocks in the
+    reference output hold a single word, half the headings introducing fragments
+    like "So", "the", "it?".
+
+    The fix RE-ATTRIBUTES rather than deletes: the fragment rejoins the sentence
+    it came from, and no word is ever lost. That matters because the discriminator
+    is imperfect, so the failure mode must be a mis-attributed word, not a
+    missing one.
+    """
+    from audio_to_text.transcribe import smooth_micro_turns
+
+    turns = [
+        {"speaker": "S0", "start": 0.0, "end": 5.0, "confidence": 0.9,
+         "text": "we can extend it to some of"},
+        # zero-duration one-word fragment attributed to a different speaker
+        {"speaker": "S1", "start": 5.0, "end": 5.0, "confidence": 0.4, "text": "the"},
+        {"speaker": "S0", "start": 5.0, "end": 9.0, "confidence": 0.9,
+         "text": "other things"},
+    ]
+
+    result = smooth_micro_turns(turns)
+
+    assert len(result) == 1
+    assert result[0]["speaker"] == "S0"
+    assert result[0]["text"] == "we can extend it to some of the other things"
+    assert (result[0]["start"], result[0]["end"]) == (0.0, 9.0)
+    # every word survives
+    before = sorted(w for t in turns for w in t["text"].split())
+    assert sorted(result[0]["text"].split()) == before
+
+
+def test_smooth_micro_turns_keeps_backchannel_turns():
+    """"yeah"/"mm-hmm" are GENUINE one-word turns in a meeting, not jitter. Of the
+    short blocks in the reference output 27% are lexical backchannel, and a length
+    threshold alone cannot tell the two populations apart -- absorbing one
+    misattributes real speech.
+    """
+    from audio_to_text.transcribe import smooth_micro_turns
+
+    turns = [
+        {"speaker": "S0", "start": 0.0, "end": 5.0, "confidence": 0.9, "text": "does that work"},
+        {"speaker": "S1", "start": 5.0, "end": 5.0, "confidence": 0.9, "text": "Yeah"},
+        {"speaker": "S0", "start": 5.0, "end": 9.0, "confidence": 0.9, "text": "good"},
+    ]
+
+    result = smooth_micro_turns(turns)
+
+    assert [t["speaker"] for t in result] == ["S0", "S1", "S0"]
+
+
+def test_smooth_micro_turns_keeps_a_short_turn_that_took_real_time():
+    """Exact-zero duration is the jitter signal, not shortness. A short turn that
+    actually occupies time on the clock is someone speaking.
+
+    The 0.3s duration is deliberate: it sits inside the tempting "< 0.5s" band.
+    That threshold was measured and REJECTED -- rules using it absorb genuine
+    turns, including a 93-word one, because merged-turn durations were themselves
+    corrupt. A test using a comfortably long turn would let the clause be relaxed
+    from `== 0` to `< 0.5` with the suite still green; this one catches it.
+    """
+    from audio_to_text.transcribe import smooth_micro_turns
+
+    turns = [
+        {"speaker": "S0", "start": 0.0, "end": 5.0, "confidence": 0.9, "text": "so then"},
+        {"speaker": "S1", "start": 5.0, "end": 5.3, "confidence": 0.9, "text": "Paul did"},
+        {"speaker": "S0", "start": 5.3, "end": 9.0, "confidence": 0.9, "text": "right"},
+    ]
+
+    result = smooth_micro_turns(turns)
+
+    assert [t["speaker"] for t in result] == ["S0", "S1", "S0"]
+
+
+def test_smooth_micro_turns_never_moves_speech_across_a_speaker_boundary():
+    """Only a SANDWICHED fragment is absorbed -- same speaker on both sides. If the
+    neighbours differ, absorbing would move words from one person to another, which
+    is a correctness bug rather than a readability fix.
+    """
+    from audio_to_text.transcribe import smooth_micro_turns
+
+    turns = [
+        {"speaker": "S0", "start": 0.0, "end": 5.0, "confidence": 0.9, "text": "first speaker"},
+        {"speaker": "S1", "start": 5.0, "end": 5.0, "confidence": 0.4, "text": "and"},
+        {"speaker": "S2", "start": 5.0, "end": 9.0, "confidence": 0.9, "text": "third speaker"},
+    ]
+
+    result = smooth_micro_turns(turns)
+
+    assert [t["speaker"] for t in result] == ["S0", "S1", "S2"]
+
+
+def test_group_into_turns_smooths_micro_turns_in_the_single_file_path():
+    """Pins the single-file WIRING (main() routes through group_into_turns)."""
+    from audio_to_text.transcribe import group_into_turns
+
+    aligned = [
+        {"word": "some", "start": 0.0, "end": 1.0, "probability": 0.9, "speaker": "S0"},
+        {"word": " of", "start": 1.0, "end": 2.0, "probability": 0.9, "speaker": "S0"},
+        # zero-duration jitter word attributed to another speaker
+        {"word": " the", "start": 2.0, "end": 2.0, "probability": 0.4, "speaker": "S1"},
+        {"word": " other", "start": 2.0, "end": 3.0, "probability": 0.9, "speaker": "S0"},
+        {"word": " things", "start": 3.0, "end": 4.0, "probability": 0.9, "speaker": "S0"},
+    ]
+
+    turns = group_into_turns(aligned)
+
+    assert len(turns) == 1
+    assert turns[0]["text"] == "some of the other things"

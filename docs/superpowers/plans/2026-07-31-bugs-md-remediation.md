@@ -76,18 +76,18 @@ output's filename only, not the CLI argument surface.
 
 ## Task 6 — micro-turn smoothing (Rule G2)  **[highest risk]**
 
-- [ ] 6.1 Re-measure G2's eligible set on the captured turns AFTER Task 1, since Task 1
+- [x] 6.1 Re-measure G2's eligible set on the captured turns AFTER Task 1, since Task 1
       changes block order and "sandwiched" depends on it.
-- [ ] 6.2 Hand-check every absorption on the real transcript; report genuine turns
+- [x] 6.2 Hand-check every absorption on the real transcript; report genuine turns
       damaged. If it damages real speech, do NOT land it — say so and leave it logged.
-- [ ] 6.3 Test: a sandwiched ≤2-word zero-duration non-backchannel turn is re-attributed
+- [x] 6.3 Test: a sandwiched ≤2-word zero-duration non-backchannel turn is re-attributed
       into the surrounding same-speaker turn, with every word preserved.
-- [ ] 6.4 Test: a backchannel token is NOT absorbed.
-- [ ] 6.5 Test: a turn with real duration is NOT absorbed.
-- [ ] 6.6 Test: a turn NOT sandwiched by one speaker is never moved across a speaker
+- [x] 6.4 Test: a backchannel token is NOT absorbed.
+- [x] 6.5 Test: a turn with real duration is NOT absorbed.
+- [x] 6.6 Test: a turn NOT sandwiched by one speaker is never moved across a speaker
       boundary.
-- [ ] 6.7 Fix: `smooth_micro_turns(turns)`, called from both paths.
-- [ ] 6.8 Mutation-test; re-measure fragmentation end-to-end.
+- [x] 6.7 Fix: `smooth_micro_turns(turns)`, called from both paths.
+- [x] 6.8 Mutation-test; re-measure fragmentation end-to-end.
 
 ## Task 7 — cross-speaker duplicate pairs: establish cause or log it
 

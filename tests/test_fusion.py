@@ -492,3 +492,44 @@ def test_run_fusion_uses_separate_tmp_dirs_for_each_source(tmp_path, monkeypatch
     assert len(seen_dirs) == 2
     assert seen_dirs[0] != seen_dirs[1]
     assert out_path.exists()
+
+
+def test_run_fusion_smooths_micro_turns(tmp_path, monkeypatch):
+    """Pins the fusion WIRING of micro-turn smoothing. Fusion roughly doubles
+    fragmentation (16% one-word blocks single-file vs 31% fused), so this path
+    needs it at least as much as the single-file one.
+    """
+    from audio_to_text import fusion
+
+    def fake_process_source(media_path, tmp_dir, **kwargs):
+        wav_path = tmp_dir / (media_path.stem + ".clean.wav")
+        wav_path.write_bytes(b"")
+        embeddings = {"S0": np.array([1.0, 0.0]), "S1": np.array([0.0, 1.0])}
+        if media_path.stem == "a":
+            turns = [
+                {"speaker": "S0", "start": 0.0, "end": 5.0, "confidence": 0.9,
+                 "text": "we can extend it to some of"},
+                {"speaker": "S1", "start": 5.0, "end": 5.0, "confidence": 0.4, "text": "the"},
+                {"speaker": "S0", "start": 5.0, "end": 9.0, "confidence": 0.9, "text": "other things"},
+            ]
+        else:
+            # the second mic heard the same stretch, less clearly -- so it never
+            # wins a replacement and never gap-fills, isolating the smoothing
+            turns = [
+                {"speaker": "S0", "start": 0.0, "end": 9.0, "confidence": 0.1,
+                 "text": "muffled version of the same thing"},
+            ]
+        return wav_path, turns, embeddings
+
+    monkeypatch.setattr(fusion, "_process_source", fake_process_source)
+    monkeypatch.setattr(fusion, "_correlate_envelopes", lambda a, b: (0.0, 9.9))
+
+    out_path = fusion.run_fusion(
+        tmp_path / "a.mp4", tmp_path / "b.m4a",
+        model_repo="x", language="en", initial_prompt=None, num_speakers=None,
+        output_dir=tmp_path / "out", diarization_pipeline=object(),
+    )
+
+    text = out_path.read_text(encoding="utf-8")
+    assert "some of the other things" in text
+    assert text.count("## Person") == 1
