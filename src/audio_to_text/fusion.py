@@ -132,7 +132,20 @@ def merge_turns(turns_a: list[dict], turns_b_shifted: list[dict]) -> list[dict]:
         if overlapping_b:
             best_b = max(overlapping_b, key=lambda b: b["confidence"])
             if best_b["confidence"] > turn["confidence"]:
-                merged.append({**turn, "text": best_b["text"], "confidence": best_b["confidence"]})
+                # Take B's SPAN along with B's text. Keeping A's start/end here
+                # desynchronizes the timestamps from the words: when B's turn
+                # covers more speech than A's, the merged turn claims B's whole
+                # sentence was spoken inside A's much shorter window (the shipped
+                # reference output had a 93-word block with a 0.4s duration, and
+                # the rendered mm:ss heading pointed at the wrong moment).
+                # A merged turn's span and text must always describe the same speech.
+                merged.append({
+                    **turn,
+                    "start": best_b["start"],
+                    "end": best_b["end"],
+                    "text": best_b["text"],
+                    "confidence": best_b["confidence"],
+                })
                 used_b_ids.add(id(best_b))
                 continue
         merged.append(turn)

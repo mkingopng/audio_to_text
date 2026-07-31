@@ -135,9 +135,11 @@ def test_merge_turns_prefers_higher_confidence_source_and_appends_gaps():
 
     merged = merge_turns(turns_a, turns_b_shifted)
 
+    # The replaced turn carries B's span (5.1-8.9) as well as B's text, not A's
+    # (5.0-9.0): a turn's timestamps must describe the words it actually holds.
     assert merged == [
         {"speaker": "A0", "start": 0.0, "end": 5.0, "text": "hello from a", "confidence": 0.5},
-        {"speaker": "A1", "start": 5.0, "end": 9.0, "text": "clear phone audio", "confidence": 0.9},
+        {"speaker": "A1", "start": 5.1, "end": 8.9, "text": "clear phone audio", "confidence": 0.9},
         {"speaker": "A2", "start": 9.0, "end": 11.0, "text": "only caught by phone", "confidence": 0.8},
     ]
 
@@ -182,6 +184,61 @@ def test_merge_turns_appends_b_turn_overlapping_a_different_speakers_a_turn():
         {"speaker": "A0", "start": 0.0, "end": 5.0, "text": "a says this", "confidence": 0.9},
         {"speaker": "A1", "start": 1.0, "end": 4.0, "text": "only b's mic caught this", "confidence": 0.95},
     ]
+
+
+def test_merge_turns_never_mixes_one_sources_span_with_anothers_text():
+    """A merged turn's (start, end, text) must all come from a SINGLE source turn.
+
+    The confidence-replacement branch used to emit B's text under A's start/end.
+    When B's turn spans more speech than A's, the timestamps stop describing the
+    text: the shipped reference output contains a 93-word block with a 0.4s
+    duration, and the rendered mm:ss heading points at the wrong moment.
+
+    Stated as an invariant rather than a single example, because the defect is a
+    property of the branch, not of one input.
+    """
+    turns_a = [
+        {"speaker": "S0", "start": 5.0, "end": 5.4, "text": "yeah", "confidence": 0.30},
+        {"speaker": "S1", "start": 6.0, "end": 8.0, "text": "a different speaker", "confidence": 0.95},
+    ]
+    turns_b_shifted = [
+        # B heard this as one continuous 90-second turn; A's diarization caught
+        # only a 0.4s sliver of it.
+        {"speaker": "S0", "start": 3.0, "end": 93.0, "confidence": 0.95,
+         "text": "ninety seconds of speech that source B captured as a single turn"},
+    ]
+
+    merged = merge_turns(turns_a, turns_b_shifted)
+
+    sources = {(t["start"], t["end"], t["text"]) for t in turns_a + turns_b_shifted}
+    for turn in merged:
+        assert (turn["start"], turn["end"], turn["text"]) in sources, (
+            f"merged turn {turn['text']!r} carries span "
+            f"[{turn['start']}, {turn['end']}] which belongs to a different source turn"
+        )
+
+
+def test_merge_turns_replacement_does_not_produce_impossible_speaking_rate():
+    """The user-visible face of the timestamp corruption.
+
+    93 words cannot be spoken in 0.4 seconds. Any merged turn implying a rate no
+    human reaches means its timestamps describe different speech than its text.
+    """
+    text = " ".join(f"word{i}" for i in range(93))
+    turns_a = [{"speaker": "S0", "start": 100.0, "end": 100.4, "text": "mm", "confidence": 0.3}]
+    turns_b_shifted = [
+        {"speaker": "S0", "start": 60.0, "end": 140.0, "text": text, "confidence": 0.9},
+    ]
+
+    merged = merge_turns(turns_a, turns_b_shifted)
+
+    replaced = next(t for t in merged if t["text"] == text)
+    duration = replaced["end"] - replaced["start"]
+    rate = len(replaced["text"].split()) / duration
+    assert rate < 10.0, (
+        f"{len(text.split())} words in {duration}s = {rate:.0f} words/sec; "
+        "the merged turn kept A's span while taking B's text"
+    )
 
 
 def test_run_fusion_uses_separate_tmp_dirs_for_each_source(tmp_path, monkeypatch):
