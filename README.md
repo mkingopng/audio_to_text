@@ -89,6 +89,19 @@ audio-to-text "data/meeting-video.mp4" \
 A fused run writes `<primary-stem>.fused.md`, so it sits alongside — rather than
 overwrites — the `<primary-stem>.md` a single-file run of the same recording produces.
 
+Fold one- and two-word jitter fragments back into the surrounding sentence:
+
+```bash
+audio-to-text "data/meeting.m4a" --smooth
+```
+
+Off by default. Diarization scatters single words (`"So"`, `"the"`) into their own
+blocks under the wrong speaker, and `--smooth` re-attributes them to the speaker
+either side — moving words, never deleting them. It is the only option here that
+changes who a word is attributed to, so it stays opt-in: a genuine short turn
+absorbed by mistake becomes a misattributed one, silently. On the reference pair
+it removed 6.8% of blocks with zero words lost.
+
 Optional audio cleanup before transcription (off by default):
 
 ```bash

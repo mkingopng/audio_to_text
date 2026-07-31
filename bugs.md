@@ -140,8 +140,12 @@ Diarization emits very short turns (42 of 96 under 0.5 s on a sampled slice, p10
 `_group_consecutive` faithfully starts a new block at each switch, so half the document's
 headings introduce fragments like `"So"`, `"the"`, `"it?"`.
 
-Sandwiched ≤2-word, **exactly-zero-duration**, non-backchannel turns are now
-**re-attributed** into the surrounding speaker's sentence. **Re-attribution, not deletion**
+Sandwiched ≤2-word, **exactly-zero-duration**, non-backchannel turns are
+**re-attributed** into the surrounding speaker's sentence, **behind `--smooth` and off by
+default** (`eb0e67d`). It is the only step in the pipeline that overrides diarization's
+attribution rather than preserving or improving it, and its discriminator was hand-checked
+on one meeting by the author of the word list it consults — so it is offered, not imposed.
+**Re-attribution, not deletion**
 — every word survives; only the spurious heading goes. That matters because the
 discriminator is imperfect, so its failure mode must be a misattributed word rather than a
 missing one.

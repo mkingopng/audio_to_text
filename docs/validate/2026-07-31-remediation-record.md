@@ -32,11 +32,14 @@ actually covers that moment in time. Each of those five conditions exists becaus
 it was measured to destroy real speech. A looser "these look similar" rule was tested and
 rejected: it deleted 840 characters of transcript that were not duplicates.
 
-**Jitter fragments rejoin their sentence.** Diarization scatters single words ("the", "so")
-into their own blocks under the wrong speaker. Those are now folded back into the
-surrounding sentence — *moved*, never deleted, so a mistake costs a misattributed word
+**Jitter fragments rejoin their sentence, if asked.** Diarization scatters single words
+("the", "so") into their own blocks under the wrong speaker. `--smooth` folds them back into
+the surrounding sentence — *moved*, never deleted, so a mistake costs a misattributed word
 rather than a lost one. Genuine one-word turns ("yeah", "mm-hmm") are protected, because
-absorbing those would silently put words in someone else's mouth.
+absorbing those would silently put words in someone else's mouth. It is **off by default**:
+every other step here either preserves diarization's attribution or improves it against
+measured evidence, and this one overrides it on a discriminator hand-checked over a single
+meeting. That asymmetry is what makes it an offer rather than a default.
 
 **Three things the tool now admits to.** Fusion reports its alignment confidence; any run
 reports Whisper repetition loops; fused runs report where the two recordings disagreed
