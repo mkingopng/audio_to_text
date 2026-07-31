@@ -44,9 +44,12 @@ import numpy as np
 from dotenv import dotenv_values
 from tqdm import tqdm
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_INPUT_DIR = PROJECT_ROOT / "data"
-DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output"
+# Defaults follow the caller's working directory, not this checkout, so the tool
+# behaves sensibly when invoked from another project. (PROJECT_ROOT is gone: after
+# the package move, parent.parent would resolve to src/ and quietly point the
+# defaults at the wrong place.)
+DEFAULT_INPUT_SUBDIR = "data"
+DEFAULT_OUTPUT_SUBDIR = Path("data") / "transcriptions"
 
 # Where the Hugging Face token lives when this tool is called from another
 # project, which has no .env of its own.
@@ -74,15 +77,39 @@ def resolve_model_repo(name: str) -> str:
     return MODEL_REPOS.get(name, name)
 
 
+def default_input_dir() -> Path:
+    """The directory scanned when no media argument is given: ./data in the caller's cwd."""
+    return Path.cwd() / DEFAULT_INPUT_SUBDIR
+
+
+def resolve_output_dir(arg: Path | None) -> Path:
+    """Resolve the output directory and make sure it exists.
+
+    Defaults to ./data/transcriptions in the caller's cwd -- the standard project
+    layout here -- so the transcript lands where it will live rather than in the
+    project root.
+    """
+    out = (arg or Path.cwd() / DEFAULT_OUTPUT_SUBDIR).resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
 def gather_media(target: Path | None) -> list[Path]:
     """Resolve a CLI target into a concrete list of media files.
 
-    - None            -> every media file in the default data/ folder
+    - None            -> every media file in ./data relative to the caller's cwd,
+                         or [] if there is no such directory
     - a directory     -> every media file directly inside it
     - a specific file -> just that file (existence is checked in run_whisper())
+
+    Deliberately non-recursive: the default output directory, ./data/transcriptions,
+    nests inside the default input directory, and iterdir() + is_file() is what keeps
+    a later batch run from descending into it.
     """
     if target is None:
-        target = DEFAULT_INPUT_DIR
+        target = default_input_dir()
+        if not target.is_dir():
+            return []
     if target.is_dir():
         return sorted(
             p for p in target.iterdir()
@@ -437,7 +464,8 @@ def main(argv: list[str] | None = None) -> int:
         "--output-dir",
         type=Path,
         default=None,
-        help="Directory to write .txt outputs to (default: the project's output/ folder).",
+        help="Directory to write .md transcripts to "
+             "(default: ./data/transcriptions/, created if absent).",
     )
     parser.add_argument(
         "--preprocess",
@@ -480,8 +508,17 @@ def main(argv: list[str] | None = None) -> int:
 
     media_files = gather_media(args.media)
     if not media_files:
-        where = args.media or DEFAULT_INPUT_DIR
-        print(f"error: no media files found in '{where}'", file=sys.stderr)
+        if args.media is not None:
+            print(f"error: no media files found in '{args.media}'", file=sys.stderr)
+        elif not default_input_dir().is_dir():
+            print(
+                f"error: no '{DEFAULT_INPUT_SUBDIR}/' directory in {Path.cwd()}. "
+                "Name the recording explicitly, e.g. "
+                "'audio-to-text path/to/recording.m4a'.",
+                file=sys.stderr,
+            )
+        else:
+            print(f"error: no media files in '{default_input_dir()}'", file=sys.stderr)
         return 1
 
     if args.fuse is not None:
@@ -503,7 +540,7 @@ def main(argv: list[str] | None = None) -> int:
         except RuntimeError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
-        output_dir = (args.output_dir or DEFAULT_OUTPUT_DIR).resolve()
+        output_dir = resolve_output_dir(args.output_dir)
         try:
             out_path = run_fusion(
                 args.media,
@@ -542,8 +579,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    output_dir = (args.output_dir or DEFAULT_OUTPUT_DIR).resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = resolve_output_dir(args.output_dir)
 
     print(f"Model: {model_repo} (first run downloads the weights from Hugging Face)")
     if do_preprocess:

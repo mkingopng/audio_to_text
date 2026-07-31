@@ -398,7 +398,7 @@ git commit -m "feat: resolve HF_TOKEN from env, cwd .env, or ~/.config/audio-to-
 - Consumes: `audio_to_text.transcribe` from Task 1.
 - Produces: `default_input_dir() -> Path` and `resolve_output_dir(arg: Path | None) -> Path`. `resolve_output_dir` both resolves and creates the directory.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_defaults.py`:
 
@@ -475,12 +475,12 @@ def test_gather_media_returns_nothing_when_no_data_dir(monkeypatch, tmp_path):
     assert gather_media(None) == []
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_defaults.py -v`
 Expected: FAIL — `ImportError: cannot import name 'default_input_dir'`
 
-- [ ] **Step 3: Replace the constants**
+- [x] **Step 3: Replace the constants**
 
 In `src/audio_to_text/transcribe.py`, delete lines 44-46:
 
@@ -501,7 +501,7 @@ DEFAULT_INPUT_SUBDIR = "data"
 DEFAULT_OUTPUT_SUBDIR = Path("data") / "transcriptions"
 ```
 
-- [ ] **Step 4: Add the two resolver functions**
+- [x] **Step 4: Add the two resolver functions**
 
 Insert directly above `gather_media`:
 
@@ -523,7 +523,7 @@ def resolve_output_dir(arg: Path | None) -> Path:
     return out
 ```
 
-- [ ] **Step 5: Point gather_media at the new default**
+- [x] **Step 5: Point gather_media at the new default**
 
 In `gather_media`, change line 78 from `target = DEFAULT_INPUT_DIR` to:
 
@@ -548,7 +548,7 @@ Update the docstring's first bullet to match — it currently says "every media 
                          or [] if there is no such directory
 ```
 
-- [ ] **Step 6: Improve the not-found message**
+- [x] **Step 6: Improve the not-found message**
 
 Replace lines 450-453:
 
@@ -577,7 +577,7 @@ with:
         return 1
 ```
 
-- [ ] **Step 7: Use the resolver at both output sites**
+- [x] **Step 7: Use the resolver at both output sites**
 
 At line 477 (the `--fuse` branch), replace:
 
@@ -606,7 +606,7 @@ with:
 
 The `--fuse` branch previously never created its output directory — it relied on `run_fusion`. Routing both through `resolve_output_dir` fixes that asymmetry.
 
-- [ ] **Step 8: Update the --output-dir help text**
+- [x] **Step 8: Update the --output-dir help text**
 
 In the `--output-dir` argument at line 404-409, the help string says `.txt outputs` and names the project's `output/` folder. Both are wrong — the tool writes `.md`. Replace the `help=` value with:
 
@@ -615,17 +615,17 @@ In the `--output-dir` argument at line 404-409, the help string says `.txt outpu
              "(default: ./data/transcriptions/, created if absent).",
 ```
 
-- [ ] **Step 9: Confirm the old constants are gone**
+- [x] **Step 9: Confirm the old constants are gone**
 
 Run: `grep -n "PROJECT_ROOT\|DEFAULT_INPUT_DIR\|DEFAULT_OUTPUT_DIR" src/ tests/ -r`
 Expected: no matches.
 
-- [ ] **Step 10: Run the tests**
+- [x] **Step 10: Run the tests**
 
 Run: `uv run pytest -q`
 Expected: PASS — 40 original + 2 packaging + 5 token + 7 defaults.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add src/audio_to_text/transcribe.py tests/test_defaults.py
