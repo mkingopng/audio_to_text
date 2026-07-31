@@ -776,3 +776,47 @@ def test_cross_speaker_duplicate_warning_ignores_hallucination_loops():
         turn["speaker"] = f"Person {1 + i % 3}"   # loop shredded across speakers
 
     assert detect_cross_speaker_duplicates(turns) == []
+
+
+def test_merge_turns_keeps_a_turn_when_confidence_only_TIES():
+    """Pre-existing behaviour: B replaces A only on STRICTLY higher confidence.
+
+    Source A defines the canonical paragraph boundaries, so a tie must leave A's
+    text in place. Relaxing the comparison to >= silently hands every tie to the
+    secondary recording -- a change of which microphone wins, invisible in any
+    other test.
+    """
+    turns_a = [{"speaker": "S0", "start": 0.0, "end": 5.0, "text": "A's wording", "confidence": 0.7}]
+    turns_b_shifted = [
+        {"speaker": "S0", "start": 0.1, "end": 4.9, "text": "B's wording", "confidence": 0.7},
+    ]
+
+    merged = merge_turns(turns_a, turns_b_shifted)
+
+    assert [t["text"] for t in merged] == ["A's wording"], (
+        "an equal-confidence B turn replaced A's text; only strictly higher may win"
+    )
+
+
+def test_merge_turns_returns_turns_in_chronological_order():
+    """Pre-existing behaviour: the merged list is sorted by start.
+
+    Gap-filled B turns are appended after A's, so without the final sort the
+    output interleaves wrongly -- the transcript renders out of order, and
+    micro-turn smoothing's "sandwiched by the same speaker" test reads the wrong
+    neighbours because it depends entirely on this ordering.
+    """
+    turns_a = [
+        {"speaker": "S0", "start": 100.0, "end": 105.0, "text": "late A turn", "confidence": 0.9},
+    ]
+    turns_b_shifted = [
+        # no same-speaker A turn overlaps these, so both are gap-filled and appended
+        {"speaker": "S1", "start": 10.0, "end": 12.0, "text": "early B turn", "confidence": 0.9},
+        {"speaker": "S1", "start": 200.0, "end": 202.0, "text": "later B turn", "confidence": 0.9},
+    ]
+
+    merged = merge_turns(turns_a, turns_b_shifted)
+
+    starts = [t["start"] for t in merged]
+    assert starts == sorted(starts), f"merged output is not chronological: {starts}"
+    assert [t["text"] for t in merged] == ["early B turn", "late A turn", "later B turn"]

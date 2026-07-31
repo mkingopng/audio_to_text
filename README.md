@@ -102,6 +102,45 @@ Transcripts go to `./data/transcriptions/`, created if it doesn't exist. Overrid
 
 Bias spelling of names and jargon with `--prompt "Crisis Shield, ZeroW, Margu"`.
 
+## What the tool tells you about its own output
+
+Speech recognition and speaker diarization both fail in ways that produce
+confident-looking, entirely wrong text. Rather than hide that, a run reports what it
+knows it may have got wrong. None of these stop the run — they tell you where to look.
+
+**Alignment confidence** (fused runs). Every fused run prints the offset it found between
+the two recordings and how trustworthy that offset is:
+
+```
+Offset: +26.1s (alignment confidence 1.52)
+```
+
+Above ~1.2 the two recordings clearly share acoustic content. Near 1.00 they do not, and
+you get a warning — the two files may not be the same meeting, or may barely overlap.
+Measured on a real pair: a true match scores 1.52, unrelated audio scores 1.000–1.005.
+
+**Repetition loops.** Whisper sometimes gets stuck on quiet or ambiguous audio and emits
+one word hundreds of times. It is an upstream flaw and this tool cannot fix it, but it
+will tell you when it happened:
+
+```
+warning: possible Whisper repetition loop: 'paul' x200 (17:57-18:00).
+```
+
+**Uncertain speaker attribution** (fused runs). When both recordings' diarizations
+disagree about who was speaking, the same sentence can appear under two names — one of
+which is wrong. The tool cannot tell which, so it keeps both and points at them:
+
+```
+warning: 11 block pair(s) carry near-identical text under two different speakers ...
+  14:12  Person 4 vs Person 1 (101 shared characters)
+```
+
+Choosing a copy silently would turn something you would notice while reading into a
+confident-looking misattribution you would not.
+
+See `bugs.md` for the measured incidence of each and what is still open.
+
 ## Output
 
 Markdown, one block per speaker turn:

@@ -275,6 +275,16 @@ Not fixed: the fix (treating a zero-length interval as overlapping if it falls i
 other) is small but changes gap-fill behaviour, and it was found while verifying an
 unrelated change. Logged rather than folded in.
 
+## OPEN — `find_offset` is no longer on the production path
+
+**Found:** 2026-07-31, reviewing this branch · **trivial**
+
+`run_fusion` calls `_correlate_envelopes` (which returns the offset *and* its confidence);
+`find_offset` is now a thin wrapper over it, used only by `tools/` and its own test. It is
+retained as the documented public "just give me the offset" entry point rather than
+deleted, but be aware `test_find_offset_recovers_known_delay` now exercises a wrapper, not
+the code `run_fusion` runs. `_correlate_envelopes` has its own tests.
+
 ---
 
 ## Note: transcript metrics carry run-to-run variance
