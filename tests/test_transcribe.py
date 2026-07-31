@@ -528,3 +528,79 @@ def test_fuse_module_invocation_resolves_fusion_import(tmp_path):
     assert "ModuleNotFoundError" not in result.stderr
     assert "HF_TOKEN is not set" in result.stderr
     assert result.returncode == 1
+
+
+def test_detect_repetition_loops_finds_a_loop_shredded_across_one_word_turns():
+    """The instrument-blindness case, and the reason this scan is doc-wide.
+
+    A Whisper repetition loop on ambiguous audio gets split across dozens of
+    one-word turns by diarization jitter (~31% of blocks in the reference output
+    hold a single word), so NO single block ever contains a repeat. The original
+    within-block scan reported "1 block in 714, negligible" and declared the
+    problem safely deferrable; re-measured doc-wide, one run in two carried a
+    183-token loop of a word absent from the other run entirely.
+    """
+    from audio_to_text.transcribe import detect_repetition_loops
+
+    turns = [
+        {"speaker": f"S{i % 3}", "start": float(i), "end": float(i) + 0.1,
+         "text": "Lars." if 5 <= i < 45 else "some ordinary words here"}
+        for i in range(60)
+    ]
+
+    # No individual turn holds a repeat -- a within-block scan sees nothing.
+    assert all(len(set(t["text"].split())) == len(t["text"].split()) for t in turns)
+
+    loops = detect_repetition_loops(turns)
+
+    assert len(loops) == 1
+    assert loops[0]["token"] == "lars"
+    assert loops[0]["count"] == 40
+    assert loops[0]["start"] == 5.0
+
+
+def test_detect_repetition_loops_ignores_ordinary_repeated_speech():
+    """Threshold calibration, measured rather than assumed: across the 13,454
+    tokens of the real reference transcript the longest legitimate consecutive
+    run is 4 ('okay', 'yeah', 'easier' -- natural emphasis). Warning on those
+    would cry wolf on every run.
+    """
+    from audio_to_text.transcribe import detect_repetition_loops
+
+    turns = [
+        {"speaker": "S0", "start": 0.0, "end": 1.0, "text": "okay okay okay okay"},
+        {"speaker": "S1", "start": 1.0, "end": 2.0, "text": "yeah yeah"},
+        {"speaker": "S0", "start": 2.0, "end": 3.0, "text": "that makes it easier easier easier"},
+    ]
+
+    assert detect_repetition_loops(turns) == []
+
+
+def test_run_fusion_warns_when_the_transcript_contains_a_repetition_loop(tmp_path, monkeypatch, capsys):
+    """Pins the WIRING, not just the detector. A pure function nothing calls is
+    a feature that can be deleted with the suite still green.
+    """
+    from audio_to_text import fusion
+    import numpy as np
+
+    def fake_process_source(media_path, tmp_dir, **kwargs):
+        wav_path = tmp_dir / (media_path.stem + ".clean.wav")
+        wav_path.write_bytes(b"")
+        turns = [
+            {"speaker": "SPEAKER_00", "start": float(i), "end": float(i) + 0.1,
+             "text": "Lars.", "confidence": 0.5} for i in range(30)
+        ]
+        return wav_path, turns, {"SPEAKER_00": np.array([1.0, 0.0])}
+
+    monkeypatch.setattr(fusion, "_process_source", fake_process_source)
+    monkeypatch.setattr(fusion, "find_offset", lambda wav_a, wav_b: 0.0)
+
+    fusion.run_fusion(
+        tmp_path / "a.mp4", tmp_path / "b.m4a",
+        model_repo="x", language="en", initial_prompt=None, num_speakers=None,
+        output_dir=tmp_path / "out", diarization_pipeline=object(),
+    )
+
+    err = capsys.readouterr().err
+    assert "repetition" in err.lower()
+    assert "lars" in err.lower()

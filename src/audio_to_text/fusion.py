@@ -24,6 +24,7 @@ from audio_to_text.transcribe import (
     render_markdown,
     run_diarization,
     run_whisper,
+    warn_on_repetition_loops,
 )
 
 
@@ -220,6 +221,9 @@ def run_fusion(
 
         merged = merge_turns(turns_a, turns_b_shifted)
         speaker_turns = relabel_speakers(merged)
+        # Both sources produce hallucination loops independently, so fusion can
+        # carry one through from whichever source won the turn.
+        warn_on_repetition_loops(speaker_turns)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     # ".fused.md", not ".md": the single-file path also names its output after the

@@ -66,13 +66,13 @@ output's filename only, not the CLI argument surface.
 
 ## Task 5 — warn on Whisper repetition loops
 
-- [ ] 5.1 Test: a transcript containing a doc-wide repetition loop is detected, including
+- [x] 5.1 Test: a transcript containing a doc-wide repetition loop is detected, including
       when the loop is shredded across many one-word turns (the case the original
       within-block instrument was blind to).
-- [ ] 5.2 Test: an ordinary transcript produces no warning.
-- [ ] 5.3 Fix: `detect_repetition_loops(turns)` in `transcribe.py`, called from both the
+- [x] 5.2 Test: an ordinary transcript produces no warning.
+- [x] 5.3 Fix: `detect_repetition_loops(turns)` in `transcribe.py`, called from both the
       single-file and fusion paths.
-- [ ] 5.4 Mutation-test.
+- [x] 5.4 Mutation-test.
 
 ## Task 6 — micro-turn smoothing (Rule G2)  **[highest risk]**
 

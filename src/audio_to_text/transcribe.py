@@ -254,6 +254,65 @@ def _group_consecutive(aligned_words: list[dict]) -> list[dict]:
     return turns
 
 
+# A Whisper repetition loop is a run of one token repeated far past anything
+# speech produces. Calibrated against the 13,454-token reference transcript, whose
+# longest legitimate consecutive run is 4 ("okay", "yeah", "easier" -- natural
+# emphasis); an observed hallucination ran to 183. 10 clears the former with margin
+# and catches the latter easily.
+REPETITION_LOOP_THRESHOLD = 10
+
+
+def detect_repetition_loops(
+    turns: list[dict], *, threshold: int = REPETITION_LOOP_THRESHOLD
+) -> list[dict]:
+    """Find Whisper repetition loops in a transcript's token stream.
+
+    Deliberately scanned DOC-WIDE, across turn boundaries, rather than within each
+    turn. Diarization jitter shreds a loop across dozens of one-word turns (~31% of
+    blocks in the reference output hold a single word), so a within-turn scan can
+    only see loops that fragmentation happened not to scatter -- it reported
+    "negligible" on a transcript that in fact carried a 183-token loop.
+
+    Returns one entry per run, with the token, its length, and where it starts, so
+    the caller can point at the span rather than just assert something is wrong.
+    Upstream in Whisper and not fixable here; the point is that a run which
+    hallucinates says so instead of looking clean.
+    """
+    tokens: list[tuple[str, float]] = [
+        (word.lower().strip(".,?!\"'"), turn["start"])
+        for turn in turns
+        for word in turn["text"].split()
+    ]
+
+    loops = []
+    i = 0
+    while i < len(tokens):
+        j = i
+        while j + 1 < len(tokens) and tokens[j + 1][0] == tokens[i][0]:
+            j += 1
+        length = j - i + 1
+        if length >= threshold and tokens[i][0]:
+            loops.append({
+                "token": tokens[i][0],
+                "count": length,
+                "start": tokens[i][1],
+                "end": tokens[j][1],
+            })
+        i = j + 1
+    return loops
+
+
+def warn_on_repetition_loops(turns: list[dict]) -> None:
+    """Print a stderr warning for each repetition loop found (never raises/gates)."""
+    for loop in detect_repetition_loops(turns):
+        print(
+            f"warning: possible Whisper repetition loop: {loop['token']!r} x{loop['count']} "
+            f"({_format_timestamp(loop['start'])}-{_format_timestamp(loop['end'])}). "
+            "That span is unlikely to be real speech -- review it before trusting it.",
+            file=sys.stderr,
+        )
+
+
 def relabel_speakers(turns: list[dict]) -> list[dict]:
     """Rename each turn's speaker id to "Person N" by first-appearance order.
 
@@ -615,6 +674,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     aligned_words = align_words_to_speakers(extract_words(result), turns)
                     speaker_turns = group_into_turns(aligned_words)
+                    warn_on_repetition_loops(speaker_turns)
                 except Exception as exc:
                     # Narrowly scoped to the diarization/alignment/grouping calls only
                     # (not the whole per-file try block) -- covers both
