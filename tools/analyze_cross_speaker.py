@@ -121,14 +121,17 @@ def main() -> None:
     for i, d, x, y, shared in pairs:
         key = " + ".join(sorted([x["_origin"], y["_origin"]]))
         origin_mix[key] = origin_mix.get(key, 0) + 1
-        ov = overlap_seconds(x["start"], x["end"], y["start"], y["end"])
-        shorter = min(x["end"] - x["start"], y["end"] - y["start"])
-        same_time = shorter > 0 and ov / shorter > 0.5
+        # GAP between the two spans, 0.0 when they touch or overlap. Deliberately
+        # NOT overlap-fraction: interval overlap is 0 by construction on the
+        # zero-duration turns several of these pairs involve, so that instrument
+        # is blind in exactly the cases it is asked about.
+        gap = max(0.0, max(x["start"], y["start"]) - min(x["end"], y["end"]))
+        same_time = gap == 0.0
         timing["same_time" if same_time else "different_time"] += 1
         print(f"  idx={i:>3} d={d}  {x['speaker']}({x['_origin']}) -> {y['speaker']}({y['_origin']})")
         print(f"       shared={shared:>3}ch  spans [{x['start']:.1f},{x['end']:.1f}] vs "
-              f"[{y['start']:.1f},{y['end']:.1f}]  overlap={ov:.1f}s "
-              f"({'SAME TIME' if same_time else 'different time'})")
+              f"[{y['start']:.1f},{y['end']:.1f}]  gap={gap:.1f}s "
+              f"({'SAME STRETCH OF SPEECH' if same_time else 'separated in time'})")
 
     print(f"\n== origin mix of the cross-speaker pairs ==")
     for k, v in sorted(origin_mix.items(), key=lambda kv: -kv[1]):
@@ -139,8 +142,11 @@ def main() -> None:
     print("     (agreement cannot emit two blocks: B either replaces A's turn or is dropped)")
     print("  a_kept + a_kept               -> source A's own diarization split one")
     print("     stretch of speech across two speaker clusters, with no fusion involvement")
-    print("  SAME TIME                     -> one stretch of speech rendered twice")
-    print("  different time                -> consistent with genuine repetition/cross-talk")
+    print("  gap == 0.0s                   -> one stretch of speech rendered twice;")
+    print("     two speakers cannot both produce the same 40+ characters simultaneously,")
+    print("     so cross-talk is refuted for these")
+    print("  gap >  0.0s                   -> separated in time, consistent with genuine")
+    print("     repetition. Check whether the pair sits inside a hallucination span first.")
 
 
 if __name__ == "__main__":

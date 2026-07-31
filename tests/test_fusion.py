@@ -562,3 +562,163 @@ def test_offset_confidence_reports_no_confidence_when_clips_are_too_short_to_jud
         f"two unrelated 4s clips scored {confidence}; an alignment that cannot be "
         "measured must not be reported as a confident one"
     )
+
+
+def test_containment_guard_never_consumes_a_turn_that_itself_won_a_replacement():
+    """Only an untouched A turn may be consumed. Consuming a turn that itself won
+    a replacement throws away B TEXT -- content no other block carries -- rather
+    than a duplicate. Silent, unrecoverable transcript loss.
+    """
+    turns_a = [
+        {"speaker": "S0", "start": 0.0, "end": 5.0, "text": "right okay", "confidence": 0.3},
+        {"speaker": "S1", "start": 5.0, "end": 5.2, "text": "to", "confidence": 0.9},
+        {"speaker": "S0", "start": 5.2, "end": 11.0, "confidence": 0.3,
+         "text": "the second quarter budget is agreed"},
+    ]
+    turns_b_shifted = [
+        {"speaker": "S0", "start": 0.1, "end": 10.9, "confidence": 0.95,
+         "text": "right okay the second quarter budget is agreed"},
+        # this one wins turns_a[2] -- so turns_a[2] must NOT be treated as a
+        # consumable sibling of turns_a[0], or B's unique text disappears
+        {"speaker": "S0", "start": 5.3, "end": 10.8, "confidence": 0.9,
+         "text": "only source B heard this sentence at all"},
+    ]
+
+    merged = merge_turns(turns_a, turns_b_shifted)
+
+    assert any("only source B heard this sentence at all" in t["text"] for t in merged), (
+        f"B's unique text was discarded: {[t['text'] for t in merged]}"
+    )
+
+
+def test_containment_guard_ignores_a_sibling_b_never_covered_in_time():
+    """Index adjacency is not temporal adjacency.
+
+    A-turn indices say nothing about elapsed time, so a turn twenty minutes later
+    can sit two indices away. Consuming it deletes speech and makes its words
+    reappear under a heading timestamped at the start of B's span -- the same
+    "span and text describe different speech" defect the replacement branch was
+    fixed for, re-entering through another door.
+    """
+    distant = "we can approve this version now"
+    turns_a = [
+        {"speaker": "S0", "start": 0.0, "end": 5.0, "text": "right okay", "confidence": 0.3},
+        {"speaker": "S1", "start": 5.0, "end": 1200.0, "confidence": 0.9,
+         "text": "a twenty minute monologue from someone else"},
+        # 20 minutes after B's turn ended
+        {"speaker": "S0", "start": 1200.0, "end": 1260.0, "text": distant, "confidence": 0.3},
+    ]
+    turns_b_shifted = [
+        {"speaker": "S0", "start": 0.1, "end": 10.9, "confidence": 0.95,
+         "text": f"right okay {distant}"},
+    ]
+
+    merged = merge_turns(turns_a, turns_b_shifted)
+
+    survivor = [t for t in merged if t["text"] == distant]
+    assert survivor, (
+        "a turn 20 minutes outside B's span was consumed; its speech is now lost "
+        f"and only appears under a block starting at 0.1s: {[t['text'] for t in merged]}"
+    )
+    assert survivor[0]["start"] == 1200.0
+
+
+def test_containment_guard_matches_across_casing_and_punctuation_differences():
+    """The normalisation is the point, not decoration.
+
+    Two independent ASR passes punctuate and capitalise the same speech
+    differently, so a raw substring test would miss almost every real duplication.
+    Pins that: B's text carries the same words with different case and punctuation.
+    """
+    sibling = "We can approve this version -- let's say we're happy."
+    turns_a = [
+        {"speaker": "S0", "start": 0.0, "end": 5.0, "text": "Right, okay.", "confidence": 0.3},
+        {"speaker": "S1", "start": 5.0, "end": 5.2, "text": "to", "confidence": 0.9},
+        {"speaker": "S0", "start": 5.2, "end": 11.0, "text": sibling, "confidence": 0.3},
+    ]
+    turns_b_shifted = [
+        # same words, different casing and punctuation entirely
+        {"speaker": "S0", "start": 0.1, "end": 10.9, "confidence": 0.95,
+         "text": "right okay WE CAN APPROVE THIS VERSION, let's say we're happy!"},
+    ]
+
+    merged = merge_turns(turns_a, turns_b_shifted)
+
+    assert not any(t["text"] == sibling for t in merged), (
+        "the sibling survived, so containment is being judged on raw text rather "
+        f"than normalised words: {[t['text'] for t in merged]}"
+    )
+
+
+def test_containment_floor_protects_micro_turns_and_consumes_restated_content():
+    """Two-sided pin anchored to the MEASURED bimodality, not to the constant.
+
+    Deriving the fixture from _CONTAINMENT_MIN_CHARS makes the test move with the
+    constant, so it can never fail when the constant does -- a self-referential
+    pin is no pin at all. These lengths come from the real data: fires cluster at
+    <= 8 normalized chars (micro-turns like "you know") and >= 20 (restated
+    content), with an empty gap between. Both ends must hold.
+    """
+    def run(sibling_text):
+        turns_a = [
+            {"speaker": "S0", "start": 0.0, "end": 5.0, "text": "opening", "confidence": 0.3},
+            {"speaker": "S1", "start": 5.0, "end": 5.2, "text": "to", "confidence": 0.9},
+            {"speaker": "S0", "start": 5.2, "end": 11.0, "text": sibling_text, "confidence": 0.3},
+        ]
+        turns_b = [{"speaker": "S0", "start": 0.1, "end": 10.9, "confidence": 0.95,
+                    "text": f"opening {sibling_text} and then some more"}]
+        return [t["text"] for t in merge_turns(turns_a, turns_b)]
+
+    # 8 chars -- the micro-turn cluster. Consuming these is fragmentation
+    # smoothing by the back door, and "Daniel" may be a real one-word answer.
+    assert "you know" in run("you know"), "an 8-char micro-turn was consumed"
+    assert "Daniel" in run("Daniel"), "a 6-char one-word turn was consumed"
+    # 20+ chars -- genuinely restated content, must go
+    restated = "along the same lines"
+    assert restated not in run(restated), "a 20-char restated block was NOT consumed"
+
+
+def test_containment_radius_does_not_reach_beyond_two_a_turns():
+    """Two-sided pin on the radius, anchored to literal distances.
+
+    Radius must be >= 2 (same-speaker A turns are never adjacent) but must not
+    creep wider: the further it reaches, the more unrelated same-speaker turns
+    become deletable on a text match alone.
+    """
+    sibling = "the number we finally agreed on today"
+
+    def run(intervening):
+        turns_a = [{"speaker": "S0", "start": 0.0, "end": 5.0, "text": "opening", "confidence": 0.3}]
+        for i in range(intervening):
+            turns_a.append({"speaker": f"S{i+1}", "start": 5.0 + i * 0.1,
+                            "end": 5.1 + i * 0.1, "text": "uh", "confidence": 0.9})
+        turns_a.append({"speaker": "S0", "start": 6.0, "end": 10.0,
+                        "text": sibling, "confidence": 0.3})
+        turns_b = [{"speaker": "S0", "start": 0.1, "end": 10.9, "confidence": 0.95,
+                    "text": f"opening {sibling}"}]
+        return [t["text"] for t in merge_turns(turns_a, turns_b)]
+
+    # exactly 2 A-indices apart -> consumed (the real same-speaker case)
+    assert sibling not in run(1), "the radius-2 case must fire"
+    # 3 apart -> beyond reach, must survive
+    assert sibling in run(2), "the guard reached further than two A turns"
+
+
+def test_offset_confidence_test_tracks_the_shipped_threshold_and_measured_band():
+    """Pins the calibration itself, not a magic number.
+
+    Asserting against a hardcoded 1.2 lets the shipped threshold move anywhere in
+    a wide band with the suite green -- to 5.0, where every legitimate fusion
+    warns, or to 1.003, below the measured null ceiling of 1.0050. Anchored here
+    to the values actually measured on the real pair.
+    """
+    from audio_to_text.fusion import OFFSET_CONFIDENCE_THRESHOLD
+
+    measured_true_pair = 1.5162
+    measured_null_ceiling = 1.0050
+
+    assert measured_null_ceiling < OFFSET_CONFIDENCE_THRESHOLD < measured_true_pair, (
+        f"threshold {OFFSET_CONFIDENCE_THRESHOLD} no longer separates the measured "
+        f"null ceiling ({measured_null_ceiling}) from the measured true pair "
+        f"({measured_true_pair})"
+    )

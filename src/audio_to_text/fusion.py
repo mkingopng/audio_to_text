@@ -234,6 +234,18 @@ def merge_turns(turns_a: list[dict], turns_b_shifted: list[dict]) -> list[dict]:
                 continue
             if turns_a[sibling_index]["speaker"] != speaker:
                 continue
+            # The sibling must be speech B's turn ACTUALLY COVERS. Index adjacency
+            # alone is not enough: A-turn indices say nothing about elapsed time, so
+            # a turn twenty minutes later can sit two indices away and would be
+            # deleted, its words reappearing under a heading timestamped at the
+            # start of B's span. That is the same defect the replacement branch was
+            # fixed for -- a turn's span and text describing different speech --
+            # coming back through a different door.
+            if overlap_seconds(
+                turns_a[sibling_index]["start"], turns_a[sibling_index]["end"],
+                best_b["start"], best_b["end"],
+            ) <= 0.0:
+                continue
             sibling = _normalize_for_containment(turns_a[sibling_index]["text"])
             if len(sibling) >= _CONTAINMENT_MIN_CHARS and sibling in b_text:
                 consumed.add(sibling_index)

@@ -716,3 +716,135 @@ def test_group_into_turns_smooths_micro_turns_in_the_single_file_path():
 
     assert len(turns) == 1
     assert turns[0]["text"] == "some of the other things"
+
+
+def test_smooth_micro_turns_keeps_multi_word_backchannel():
+    """"Yeah yeah" / "no no" are the commonest real two-word backchannels, and the
+    rule admits turns of up to two words -- so they are squarely in scope.
+
+    Keying the whole string at once squashed them to "yeahyeah", which is not in
+    the token set, so the guard that exists to protect backchannel let the most
+    common backchannel of all straight through.
+    """
+    from audio_to_text.transcribe import smooth_micro_turns
+
+    for text in ("Yeah yeah", "no no", "yeah okay"):
+        turns = [
+            {"speaker": "S0", "start": 0.0, "end": 5.0, "confidence": 0.9, "text": "does that work"},
+            {"speaker": "S1", "start": 5.0, "end": 5.0, "confidence": 0.9, "text": text},
+            {"speaker": "S0", "start": 5.0, "end": 9.0, "confidence": 0.9, "text": "good"},
+        ]
+
+        result = smooth_micro_turns(turns)
+
+        assert [t["speaker"] for t in result] == ["S0", "S1", "S0"], (
+            f"{text!r} was absorbed as jitter"
+        )
+
+
+def test_smooth_micro_turns_keeps_hyphenated_backchannel():
+    """The hyphen must survive normalisation, or "mm-hmm" and "uh-huh" fall out of
+    the token set and get absorbed -- they are among the most frequent genuine
+    one-word turns in the reference output.
+    """
+    from audio_to_text.transcribe import smooth_micro_turns
+
+    for text in ("mm-hmm", "uh-huh"):
+        turns = [
+            {"speaker": "S0", "start": 0.0, "end": 5.0, "confidence": 0.9, "text": "and then we ship"},
+            {"speaker": "S1", "start": 5.0, "end": 5.0, "confidence": 0.9, "text": text},
+            {"speaker": "S0", "start": 5.0, "end": 9.0, "confidence": 0.9, "text": "right"},
+        ]
+
+        assert [t["speaker"] for t in smooth_micro_turns(turns)] == ["S0", "S1", "S0"], (
+            f"{text!r} was absorbed as jitter"
+        )
+
+
+def test_smooth_micro_turns_word_limit_is_pinned_on_both_sides():
+    """Two-sided pin on the word-count clause.
+
+    Relaxing it to <= 4 absorbs 3- and 4-word REAL turns -- the destructive
+    direction. Tightening it to <= 1 silently drops the two-word fragments the
+    rule is documented to handle ("be a" inside "going to be a new season").
+    """
+    from audio_to_text.transcribe import smooth_micro_turns
+
+    def run(fragment):
+        turns = [
+            {"speaker": "S0", "start": 0.0, "end": 5.0, "confidence": 0.9, "text": "going to"},
+            {"speaker": "S1", "start": 5.0, "end": 5.0, "confidence": 0.4, "text": fragment},
+            {"speaker": "S0", "start": 5.0, "end": 9.0, "confidence": 0.9, "text": "new season"},
+        ]
+        return smooth_micro_turns(turns)
+
+    # two words -> absorbed (the documented "be a" case)
+    assert len(run("be a")) == 1
+    # three words -> a real turn, must survive
+    assert [t["speaker"] for t in run("be a whole")] == ["S0", "S1", "S0"]
+
+
+def test_repetition_loop_threshold_ignores_real_emphasis_and_catches_a_loop():
+    """Two-sided pin anchored to MEASURED literals, not to the constant.
+
+    Deriving the run lengths from REPETITION_LOOP_THRESHOLD makes the test track
+    the constant, so it cannot fail when the constant moves. These numbers are
+    measured: across the 13,454 tokens of the reference transcript the longest
+    legitimate consecutive run is 4 ("okay", "yeah", "easier"), and an observed
+    hallucination ran to 183. Warning on 4 would cry wolf on every real run.
+    """
+    from audio_to_text.transcribe import detect_repetition_loops
+
+    def run(count, token="Lars."):
+        return detect_repetition_loops([
+            {"speaker": "S0", "start": float(i), "end": float(i) + 0.1, "text": token}
+            for i in range(count)
+        ])
+
+    # the longest run real speech produced in the reference transcript
+    assert run(4, "okay") == [], "warned on ordinary emphasis (4 repeats)"
+    assert run(6) == [], "warned on 6 repeats -- below anything measured as a loop"
+    # a genuine loop
+    assert len(run(10)) == 1, "missed a 10-token loop"
+    assert run(183)[0]["count"] == 183
+
+
+def test_detect_repetition_loops_sees_through_mixed_punctuation():
+    """A real Whisper loop is not one repeated string -- it comes out as
+    "Lars. Lars, Lars!" with the punctuation varying. Tests that reuse one identical
+    token never exercise the stripping, so it could be narrowed to "." unnoticed.
+    """
+    from audio_to_text.transcribe import detect_repetition_loops
+
+    variants = ["Lars.", "Lars,", "Lars!", "Lars?", '"Lars"', "Lars'"]
+    turns = [
+        {"speaker": "S0", "start": float(i), "end": float(i) + 0.1,
+         "text": variants[i % len(variants)]}
+        for i in range(20)
+    ]
+
+    loops = detect_repetition_loops(turns)
+
+    assert len(loops) == 1
+    assert loops[0]["token"] == "lars"
+    assert loops[0]["count"] == 20
+
+
+def test_smooth_micro_turns_keeps_the_least_confident_score_when_absorbing():
+    """An absorbed turn's confidence must be the MINIMUM of the three, not the
+    maximum. The merged block now contains a fragment the diarizer was unsure
+    about, so the combined turn is at most as trustworthy as its weakest part --
+    taking the max would launder low-confidence text into a confident-looking one.
+    """
+    from audio_to_text.transcribe import smooth_micro_turns
+
+    turns = [
+        {"speaker": "S0", "start": 0.0, "end": 5.0, "confidence": 0.9, "text": "some of"},
+        {"speaker": "S1", "start": 5.0, "end": 5.0, "confidence": 0.2, "text": "the"},
+        {"speaker": "S0", "start": 5.0, "end": 9.0, "confidence": 0.8, "text": "other things"},
+    ]
+
+    result = smooth_micro_turns(turns)
+
+    assert len(result) == 1
+    assert result[0]["confidence"] == 0.2

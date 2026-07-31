@@ -3,8 +3,13 @@
 Sweeps the A-index radius and the minimum-length floor, and reports for each
 setting: how many same-speaker pairs it would consume, how many CROSS-speaker
 pairs it would consume if it were not restricted (which is the failure mode --
-consuming the correctly attributed copy), and how many characters it removes
-that are NOT duplicated (which must be zero for a lossless guard).
+consuming the correctly attributed copy), and how many characters it removes.
+
+Full containment is lossless by construction -- the consumed text is a substring
+of the block that remains -- so this tool does not attempt to report "characters
+destroyed": for this criterion it is always zero, and a column that is zero by
+construction is theatre. tools/verify_lossless.py measures the property end to end
+on rendered output instead, where it can actually fail.
 
 The instrumented merge is checked for equivalence against production merge_turns
 on this exact input before any of its numbers are used -- an instrument that
@@ -85,11 +90,13 @@ def main() -> None:
           f"gap-fill (b_gapfill): {len(merged) - len(turns_a)}\n")
 
     print(f"{'radius':>7} {'floor':>6} {'SAME fires':>11} {'cross fires':>12} "
-          f"{'chars removed':>14} {'non-dup chars':>14}")
+          f"{'chars removed':>14}")
     print("-" * 70)
+    # floor 8 and 20 bracket the measured bimodal gap (micro-turns <= 8 chars,
+    # restated content >= 20), which is the argument the shipped value rests on.
     for radius in (1, 2, 3, 4):
-        for floor in (0, 20, 40, 60):
-            same = cross = chars = nondup = 0
+        for floor in (0, 8, 20, 40):
+            same = cross = chars = 0
             for i, b in replacement.items():
                 bn = norm(b["text"])
                 for j in range(max(0, i - radius), min(len(turns_a), i + radius + 1)):
@@ -104,17 +111,20 @@ def main() -> None:
                             chars += len(jn)
                         else:
                             cross += 1
-            print(f"{radius:>7} {floor:>6} {same:>11} {cross:>12} {chars:>14} {nondup:>14}")
+            print(f"{radius:>7} {floor:>6} {same:>11} {cross:>12} {chars:>14}")
 
     # What the guard leaves behind, at the chosen setting.
-    print("\n== detail at radius=2, floor=40 (same-speaker only) ==")
+    print(f"\n== detail at the SHIPPED setting: radius={fusion._CONTAINMENT_RADIUS}, "
+          f"floor={fusion._CONTAINMENT_MIN_CHARS} (same-speaker only) ==")
     for i, b in replacement.items():
         bn = norm(b["text"])
-        for j in range(max(0, i - 2), min(len(turns_a), i + 3)):
+        for j in range(max(0, i - fusion._CONTAINMENT_RADIUS),
+                       min(len(turns_a), i + fusion._CONTAINMENT_RADIUS + 1)):
             if j == i or j in replacement:
                 continue
             jn = norm(turns_a[j]["text"])
-            if len(jn) >= 40 and jn and jn in bn and turns_a[j]["speaker"] == turns_a[i]["speaker"]:
+            if (len(jn) >= fusion._CONTAINMENT_MIN_CHARS and jn in bn
+                    and turns_a[j]["speaker"] == turns_a[i]["speaker"]):
                 print(f"   A[{i}] replaced; A[{j}] ({len(jn)} chars) fully contained -> consume")
                 print(f"      sibling: {turns_a[j]['text'][:90]!r}")
 

@@ -340,8 +340,18 @@ BACKCHANNEL_TOKENS = frozenset({
 })
 
 
-def _backchannel_key(text: str) -> str:
-    return re.sub(r"[^a-z-]", "", text.lower())
+def _is_backchannel(text: str) -> bool:
+    """True when EVERY word is an agreement token.
+
+    Checked per word, not over the whole string: the rule admits turns of up to two
+    words, and squashing "Yeah yeah" into one key ("yeahyeah") put the commonest
+    real two-word backchannels -- "yeah yeah", "no no", "yeah okay" -- outside the
+    set they exist to protect. The hyphen is deliberately kept, or "mm-hmm" and
+    "uh-huh" fall out of it too.
+    """
+    words = [re.sub(r"[^a-z-]", "", word.lower()) for word in text.split()]
+    words = [word for word in words if word]
+    return bool(words) and all(word in BACKCHANNEL_TOKENS for word in words)
 
 
 def smooth_micro_turns(turns: list[dict]) -> list[dict]:
@@ -384,7 +394,7 @@ def smooth_micro_turns(turns: list[dict]) -> list[dict]:
             and preceding["speaker"] == following["speaker"] != turn["speaker"]
             and len(turn["text"].split()) <= 2
             and turn["end"] - turn["start"] == 0.0
-            and _backchannel_key(turn["text"]) not in BACKCHANNEL_TOKENS
+            and not _is_backchannel(turn["text"])
         ):
             parts = [preceding["text"], turn["text"], following["text"]]
             preceding["text"] = " ".join(part for part in parts if part)
@@ -744,7 +754,6 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     aligned_words = align_words_to_speakers(extract_words(result), turns)
                     speaker_turns = group_into_turns(aligned_words)
-                    warn_on_repetition_loops(speaker_turns)
                 except Exception as exc:
                     # Narrowly scoped to the diarization/alignment/grouping calls only
                     # (not the whole per-file try block) -- covers both
@@ -754,6 +763,10 @@ def main(argv: list[str] | None = None) -> int:
                     raise DiarizationError(
                         f"diarization failed for '{media_path.name}': {exc}"
                     ) from exc
+                # Outside the diarization try on purpose: this only prints a
+                # warning, and it must never be the reason a file is reported as
+                # "diarization failed" and skipped.
+                warn_on_repetition_loops(speaker_turns)
             except FileNotFoundError as exc:
                 print(f"error: {exc}", file=sys.stderr)
                 failures += 1
