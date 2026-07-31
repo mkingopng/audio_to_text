@@ -159,3 +159,29 @@ bugs surfaced with it.
       reasoning for that is recorded in `bugs.md`.
 
 Landed as `5b91665` and the commit following it.
+
+---
+
+## Reconciliation — 2026-08-01
+
+Task 6 landed smoothing on the production path unconditionally. It was returned to opt-in
+behind `--smooth`, default off (`eb0e67d`), matching the approved design.
+
+The reasoning is an asymmetry the plan did not capture: every other step in this pipeline
+either preserves diarization's attribution or improves it against measured evidence, while
+this one *overrides* it on a discriminator hand-checked over a single meeting by the author
+of the word list it consults. A wrong absorption puts words in someone else's mouth and
+says nothing. Wrong-by-default is a different risk from wrong-on-request.
+
+Both call sites are now pinned in both directions, and all three plausible regressions were
+mutation-tested: smoothing unconditionally in `group_into_turns`, ignoring the parameter
+inside `run_fusion`, and parsing the flag in `main()` but never passing it. Each turned a
+test red.
+
+Verified on real audio rather than fixtures: a fused run of aligned 5-minute slices of the
+reference pair recovered a **+10.1 s** offset (predicted +10.1 s from the pair's known
+26.1 s) at **alignment confidence 1.51** (reference true pair: 1.5162), reported two
+cross-speaker disagreements with timestamps, and produced an identical word multiset with
+and without `--smooth`. That slice was too small to expect an absorption — eligibility is
+3.4% of blocks, so ~1.3 fires expected in 37 blocks — so a 20-minute slice was run to
+observe the rule actually firing.

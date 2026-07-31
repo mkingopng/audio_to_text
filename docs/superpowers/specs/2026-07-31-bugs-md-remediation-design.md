@@ -1,5 +1,26 @@
 # Design — remediating the open items in `bugs.md`
 
+> **Reconciled 2026-08-01 against what shipped.** Three things in this document were
+> superseded by measurement during implementation; the code and `bugs.md` are authoritative
+> where they differ.
+>
+> 1. **The containment floor is 20 normalized characters, not 40.** This document copied 40
+>    from the redundancy detector's criterion. Measured on the real pair, the guard's fires
+>    are bimodal — micro-turns at ≤8 chars, genuinely restated content at ≥20 — and 20 sits
+>    in the empty gap between them. A threshold derived from the fire distribution beats one
+>    borrowed from a different instrument.
+> 2. **The cross-speaker duplicates were NOT out of scope.** This document claimed
+>    distinguishing attribution error from genuine cross-talk "requires listening to the
+>    recordings". False: `merge_turns` cannot emit two blocks when the sources agree, so a
+>    gap-filled B turn in a cross-speaker pair *proves* they disagreed. The cause is now
+>    established without audio — see `2026-07-31-cross-speaker-cause.md`.
+> 3. **The guard also needed a time bound.** Index adjacency says nothing about elapsed time,
+>    so a radius-2 sibling can sit twenty minutes away; the first implementation deleted 60
+>    seconds of speech at t=1200. The sibling must be speech B's turn actually covers.
+>
+> The smoothing rule shipped unconditional and was returned to opt-in (`eb0e67d`), as
+> specified below.
+
 **Date:** 2026-07-31
 **Branch:** `feature/global-tool`
 **Validation basis:** `docs/validate/2026-07-31-bugs-md-triage.md` (revision 5, passed the
