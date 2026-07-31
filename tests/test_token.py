@@ -60,6 +60,52 @@ def test_empty_token_is_not_accepted(monkeypatch, tmp_path):
     assert resolve_hf_token() == "from_global"
 
 
+def test_main_passes_the_resolved_token_to_the_pipeline(monkeypatch, tmp_path):
+    """The headline feature, pinned end-to-end through main().
+
+    Every other test here exercises resolve_hf_token() directly, and the six
+    main() tests elsewhere *stub* it -- so reverting both call sites to the old
+    os.environ.get("HF_TOKEN") left the whole suite green. This is the only test
+    that fails if main() stops using the resolution chain.
+    """
+    import audio_to_text.transcribe as t
+
+    monkeypatch.chdir(tmp_path)          # no ./.env here
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "meeting.m4a").touch()
+
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / ".env").write_text("HF_TOKEN=from_global\n")
+    monkeypatch.setattr(t, "CONFIG_DIR", config)
+
+    seen: dict[str, object] = {}
+
+    def capture(token):
+        seen["token"] = token
+        return object()
+
+    fake_result = {
+        "segments": [
+            {"words": [{"word": "hi", "start": 0.0, "end": 0.5, "probability": 0.9}]},
+        ],
+    }
+
+    monkeypatch.setattr(t, "ensure_apple_silicon", lambda: None)
+    monkeypatch.setattr(t, "load_diarization_pipeline", capture)
+    monkeypatch.setattr(t, "preprocess_audio", lambda media_path, tmp_dir, audio_filter: media_path)
+    monkeypatch.setattr(t, "run_whisper", lambda *a, **k: fake_result)
+    monkeypatch.setattr(
+        t, "run_diarization",
+        lambda source, pipeline, *, num_speakers=None: (
+            [{"start": 0.0, "end": 1.0, "speaker": "SPEAKER_00"}], {}
+        ),
+    )
+
+    assert t.main([]) == 0
+    assert seen["token"] == "from_global"
+
+
 def test_does_not_mutate_process_environment(monkeypatch, tmp_path):
     """Reading a .env must not leak into os.environ -- that would make the
     lookup order depend on whatever ran earlier in the process."""

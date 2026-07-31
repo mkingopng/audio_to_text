@@ -75,6 +75,59 @@ def test_gather_media_still_returns_an_explicitly_named_missing_file(monkeypatch
     assert gather_media(missing) == [missing]
 
 
+def test_main_fuse_defaults_to_data_transcriptions(monkeypatch, tmp_path):
+    """The --fuse branch's default output dir, which no other test reaches.
+
+    Every other --fuse test passes an explicit --output-dir and mocks run_fusion
+    to raise, so reverting this site to the old PROJECT_ROOT/output default left
+    the suite green.
+    """
+    import audio_to_text.transcribe as t
+
+    monkeypatch.chdir(tmp_path)
+    primary = tmp_path / "teams.mp4"
+    primary.touch()
+    secondary = tmp_path / "phone.m4a"
+    secondary.touch()
+
+    seen: dict[str, object] = {}
+
+    def fake_run_fusion(a, b, **kwargs):
+        seen["output_dir"] = kwargs["output_dir"]
+        out = kwargs["output_dir"] / "teams.md"
+        out.write_text("x")
+        return out
+
+    monkeypatch.setattr(t, "ensure_apple_silicon", lambda: None)
+    monkeypatch.setattr(t, "resolve_hf_token", lambda: "fake-token")
+    monkeypatch.setattr(t, "load_diarization_pipeline", lambda token: object())
+    monkeypatch.setattr("audio_to_text.fusion.run_fusion", fake_run_fusion)
+
+    exit_code = t.main([str(primary), "--fuse", str(secondary)])
+
+    assert exit_code == 0
+    assert seen["output_dir"] == (tmp_path / "data" / "transcriptions").resolve()
+    assert (tmp_path / "data" / "transcriptions").is_dir()
+
+
+def test_main_reports_missing_data_dir_with_actionable_guidance(monkeypatch, tmp_path, capsys):
+    """The 'no data/ directory' branch is a user-facing deliverable of this change
+    and was entirely unpinned -- replacing its condition with `elif False:` left
+    the suite green."""
+    import audio_to_text.transcribe as t
+
+    monkeypatch.chdir(tmp_path)          # no ./data here
+    monkeypatch.setattr(t, "ensure_apple_silicon", lambda: None)
+
+    exit_code = t.main([])
+
+    err = capsys.readouterr().err
+    assert exit_code == 1
+    assert "no 'data/' directory" in err
+    assert str(tmp_path) in err          # names the CALLER's cwd, not the checkout
+    assert "audio-to-text path/to/recording.m4a" in err
+
+
 def test_main_writes_into_data_transcriptions_by_default(monkeypatch, tmp_path):
     """End-to-end through main() with no --output-dir: the whole point of the
     feature. The unit tests above cover resolve_output_dir in isolation, but only

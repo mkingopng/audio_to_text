@@ -857,8 +857,12 @@ In-flight changes to the plan as written. All five tasks shipped; none dropped.
 2. **Task 1 — `transcribe.py`'s own module docstring** carried five `uv run python
    src/transcribe.py` examples. Not in the plan's file list; updated.
 3. **Task 2 — six existing tests stubbed `t.load_dotenv`,** which the task deletes. Not
-   anticipated. Re-pointed to stub `resolve_hf_token` with an explicit fake, which is
-   strictly stronger: the old stub still let a real ambient `HF_TOKEN` reach the code.
+   anticipated. Re-pointed to stub `resolve_hf_token` with an explicit fake.
+   *Corrected after review:* this was originally recorded here as "strictly stronger,
+   because the old stub still let a real ambient `HF_TOKEN` reach the code." That was
+   wrong — all six also stub `load_diarization_pipeline`, so the ambient token was already
+   inert. The swap is **neutral** in effect, and it converted the token lookup into a
+   stubbed seam that nothing verified (see amendment 7).
 4. **Task 3, Step 5 — simplified.** The plan proposed a `not target.exists()` branch with a
    `target == default_input_dir()` comparison. Unnecessary: handling the missing directory
    inside the `target is None` branch is equivalent and clearer, and an explicitly-named
@@ -870,6 +874,31 @@ In-flight changes to the plan as written. All five tasks shipped; none dropped.
    Task 3 tests covered `resolve_output_dir` in isolation but nothing proved `main()`
    routed through it; a `main()` still writing to a stale constant would have passed every
    other test. Mutation-checked: replacing the call with `Path.cwd()` fails it.
+
+7. **REVIEW — the adversarial pass failed the change and three real coverage gaps were
+   fixed.** A mutation-testing contrarian pass found that the suite was green under each of
+   these mutations, i.e. the behaviour was entirely unpinned:
+   - **Both `main()` call sites reverted to `os.environ.get("HF_TOKEN")`** — the headline
+     feature deleted, 57/57 still passing. Cause: the six re-pointed stubs (amendment 3)
+     stub `resolve_hf_token` and never assert it was called or that its value reaches
+     `load_diarization_pipeline`. Fixed by `test_main_passes_the_resolved_token_to_the_pipeline`,
+     which captures the pipeline's argument and asserts it equals the token from
+     `CONFIG_DIR/.env`.
+   - **The `--fuse` default output dir** — every `--fuse` test passes an explicit
+     `--output-dir` and mocks `run_fusion` to raise, so the default never executed. Fixed by
+     `test_main_fuse_defaults_to_data_transcriptions`. (Commit `2b36c5a`'s claim that this
+     site "fixes an asymmetry" is also partly redundant: `fusion.py:211` already mkdirs.)
+   - **The "no `data/` directory" guidance message** — a user-facing deliverable of this
+     change, unpinned; `elif False:` left the suite green. Fixed by
+     `test_main_reports_missing_data_dir_with_actionable_guidance`.
+
+   Two minor fixes from the same pass: `test_module_entry_point_runs` now runs with
+   `cwd=tmp_path` (`python -m` puts CWD on `sys.path`, so it could have resolved by
+   directory accident), and `test_environment.py`'s bare `load_dotenv()` — which
+   permanently injected a real `HF_TOKEN` into `os.environ` for the whole session, poisoning
+   any later `main()`-level token test — now goes through `resolve_hf_token()`.
+
+   All three mutations were re-run after the fix and now fail the suite. 60 tests green.
 
 ## Acceptance (VERIFY phase)
 
