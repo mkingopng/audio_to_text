@@ -167,6 +167,91 @@ def test_merge_turns_does_not_duplicate_a_b_turn_spanning_two_a_turns():
     assert a0_texts == ["one continuous phone turn", "a turn two"]
 
 
+def test_merge_turns_consumes_a_sibling_a_turn_contained_in_the_winning_b_text():
+    """The residual redundancy left behind after the used_b_ids fix.
+
+    When B's diarization keeps as one turn what A's split into two same-speaker
+    turns, B's text wins one of them -- and B's spanning text CONTAINS what the
+    sibling A turn says, so the sibling is emitted again underneath. The earlier
+    fix removed exact duplication; this is containment duplication, and it
+    restated whole paragraphs (up to 325 shared characters) under a second
+    heading in the reference output.
+    """
+    sibling = "we can approve this version, let us say we are happy"
+    turns_a = [
+        {"speaker": "A0", "start": 0.0, "end": 5.0, "text": "right okay", "confidence": 0.3},
+        {"speaker": "A1", "start": 5.0, "end": 5.2, "text": "to", "confidence": 0.9},
+        {"speaker": "A0", "start": 5.2, "end": 11.0, "text": sibling, "confidence": 0.3},
+    ]
+    turns_b_shifted = [
+        {"speaker": "A0", "start": 0.1, "end": 10.9, "confidence": 0.95,
+         "text": f"right okay {sibling}"},
+    ]
+
+    merged = merge_turns(turns_a, turns_b_shifted)
+
+    texts = [t["text"] for t in merged]
+    assert sum(sibling in t for t in texts) == 1, (
+        f"the sibling turn is emitted twice -- once inside B's winning text and "
+        f"once on its own: {texts}"
+    )
+
+
+def test_containment_guard_does_not_fire_across_speakers():
+    """Restricted to same-speaker on purpose. A cross-speaker near-duplicate means
+    one of the two headings is WRONG, and the guard cannot tell which -- firing
+    there consumes the correctly attributed copy and keeps the misattributed one,
+    worsening the defect. Measured on the real pair: at radius 2 an unrestricted
+    guard fires on 28 cross-speaker cases.
+    """
+    shared = "the budget for the second quarter is what we agreed"
+    turns_a = [
+        {"speaker": "A0", "start": 0.0, "end": 5.0, "text": "opening remark", "confidence": 0.3},
+        {"speaker": "A1", "start": 5.0, "end": 5.2, "text": "mm", "confidence": 0.9},
+        # DIFFERENT speaker from the replaced turn
+        {"speaker": "A2", "start": 5.2, "end": 11.0, "text": shared, "confidence": 0.3},
+    ]
+    turns_b_shifted = [
+        {"speaker": "A0", "start": 0.1, "end": 10.9, "confidence": 0.95,
+         "text": f"opening remark {shared}"},
+    ]
+
+    merged = merge_turns(turns_a, turns_b_shifted)
+
+    assert any(t["speaker"] == "A2" and t["text"] == shared for t in merged), (
+        "the guard consumed a different speaker's turn -- that deletes the copy "
+        "that may well be the correctly attributed one"
+    )
+
+
+def test_containment_guard_does_not_swallow_short_micro_turns():
+    """A minimum length, so the guard fixes redundancy and does not quietly become
+    a fragmentation smoother.
+
+    Measured on the real pair, the fires are bimodal: a cluster at <=8 normalized
+    chars ('I', 'for', 'And', 'as', 'you know', 'Daniel') which are micro-turns,
+    and a cluster at >=20 which are genuinely restated content. The floor sits in
+    the empty gap between them. Absorbing micro-turns is a separate, riskier piece
+    of work -- 'Daniel' may be a real one-word answer.
+    """
+    turns_a = [
+        {"speaker": "A0", "start": 0.0, "end": 5.0, "text": "so anyway", "confidence": 0.3},
+        {"speaker": "A1", "start": 5.0, "end": 5.2, "text": "mm", "confidence": 0.9},
+        {"speaker": "A0", "start": 5.2, "end": 6.0, "text": "Daniel", "confidence": 0.3},
+    ]
+    turns_b_shifted = [
+        {"speaker": "A0", "start": 0.1, "end": 10.9, "confidence": 0.95,
+         "text": "so anyway Daniel is the one who owns that piece of work"},
+    ]
+
+    merged = merge_turns(turns_a, turns_b_shifted)
+
+    assert any(t["text"] == "Daniel" for t in merged), (
+        "a 6-character micro-turn was consumed; the guard must not smooth "
+        "fragmentation as a side effect"
+    )
+
+
 def test_merge_turns_appends_b_turn_overlapping_a_different_speakers_a_turn():
     """A B turn that overlaps in TIME with a different speaker's A turn (e.g. one
     mic caught cross-talk the other missed entirely) is not a replacement

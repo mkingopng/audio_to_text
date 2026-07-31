@@ -7,6 +7,7 @@ the clearer source's text per overlapping turn.
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -147,6 +148,32 @@ def _shift_and_remap(turns: list[dict], offset: float, speaker_map: dict[str, st
     return shifted
 
 
+# How far, in A-turn index terms, the containment guard looks for a sibling.
+#
+# Must be >= 2. _group_consecutive flushes a turn on EVERY speaker change, so two
+# same-speaker A turns are never adjacent -- a radius-1 guard is structurally
+# incapable of firing on the same-speaker case, and measuring it on the real pair
+# confirms it: 0 same-speaker fires at radius 1, 13 at radius 2. Beyond 2 adds
+# nothing at the length floor below (5 fires at radius 2, 3 and 4 alike).
+_CONTAINMENT_RADIUS = 2
+
+# Minimum normalized length of a sibling turn before it may be consumed.
+#
+# Without a floor the guard stops being a redundancy fix and quietly becomes a
+# fragmentation smoother. Measured on the real pair, the fires are bimodal: a
+# cluster at <= 8 normalized chars ("I", "for", "And", "as", "you know",
+# "Daniel") which are micro-turns, and a cluster at >= 20 which is genuinely
+# restated content. 20 sits in the empty gap between them. Absorbing micro-turns
+# is separate, riskier work -- "Daniel" may be a real one-word answer.
+_CONTAINMENT_MIN_CHARS = 20
+
+
+def _normalize_for_containment(text: str) -> str:
+    """Casefold and drop punctuation/whitespace differences, so containment is
+    judged on words rather than on how two ASR passes punctuated them."""
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", "", text.lower())).strip()
+
+
 def merge_turns(turns_a: list[dict], turns_b_shifted: list[dict]) -> list[dict]:
     """Merge two sources' turns (already sharing a timeline + speaker-id namespace).
 
@@ -161,10 +188,17 @@ def merge_turns(turns_a: list[dict], turns_b_shifted: list[dict]) -> list[dict]:
     B's diarization kept as one. Each B turn is used as a replacement at most
     once (first-come, chronologically-earliest A turn wins it), so the same
     B text can't get duplicated into two separate merged turns.
+
+    That leaves CONTAINMENT duplication, which the containment guard below
+    removes: B's spanning text still contains what the sibling A turn says, and
+    that sibling would otherwise be emitted again underneath it.
     """
-    merged = []
+    # Pass 1 -- decide which A turns B's text wins, without emitting anything yet.
+    # The containment guard needs to know the whole replacement set before it can
+    # tell a sibling from a turn that is itself about to be replaced.
+    replacement: dict[int, dict] = {}
     used_b_ids: set[int] = set()
-    for turn in turns_a:
+    for index, turn in enumerate(turns_a):
         overlapping_b = [
             b for b in turns_b_shifted
             if id(b) not in used_b_ids
@@ -174,22 +208,49 @@ def merge_turns(turns_a: list[dict], turns_b_shifted: list[dict]) -> list[dict]:
         if overlapping_b:
             best_b = max(overlapping_b, key=lambda b: b["confidence"])
             if best_b["confidence"] > turn["confidence"]:
-                # Take B's SPAN along with B's text. Keeping A's start/end here
-                # desynchronizes the timestamps from the words: when B's turn
-                # covers more speech than A's, the merged turn claims B's whole
-                # sentence was spoken inside A's much shorter window (the shipped
-                # reference output had a 93-word block with a 0.4s duration, and
-                # the rendered mm:ss heading pointed at the wrong moment).
-                # A merged turn's span and text must always describe the same speech.
-                merged.append({
-                    **turn,
-                    "start": best_b["start"],
-                    "end": best_b["end"],
-                    "text": best_b["text"],
-                    "confidence": best_b["confidence"],
-                })
+                replacement[index] = best_b
                 used_b_ids.add(id(best_b))
+
+    # Pass 2 -- containment guard. Only a turn that is NOT itself replaced can be
+    # consumed: every duplication of this shape has an untouched A turn as its
+    # other half, and consuming a replaced turn would discard B text instead.
+    consumed: set[int] = set()
+    for index, best_b in replacement.items():
+        b_text = _normalize_for_containment(best_b["text"])
+        speaker = turns_a[index]["speaker"]
+        low = max(0, index - _CONTAINMENT_RADIUS)
+        high = min(len(turns_a), index + _CONTAINMENT_RADIUS + 1)
+        for sibling_index in range(low, high):
+            if sibling_index == index or sibling_index in replacement:
                 continue
+            if turns_a[sibling_index]["speaker"] != speaker:
+                continue
+            sibling = _normalize_for_containment(turns_a[sibling_index]["text"])
+            if len(sibling) >= _CONTAINMENT_MIN_CHARS and sibling in b_text:
+                consumed.add(sibling_index)
+
+    # Pass 3 -- emit.
+    merged = []
+    for index, turn in enumerate(turns_a):
+        if index in consumed:
+            continue
+        best_b = replacement.get(index)
+        if best_b is not None:
+            # Take B's SPAN along with B's text. Keeping A's start/end here
+            # desynchronizes the timestamps from the words: when B's turn covers
+            # more speech than A's, the merged turn claims B's whole sentence was
+            # spoken inside A's much shorter window (the shipped reference output
+            # had a 93-word block with a 0.4s duration, and the rendered mm:ss
+            # heading pointed at the wrong moment). A merged turn's span and text
+            # must always describe the same speech.
+            merged.append({
+                **turn,
+                "start": best_b["start"],
+                "end": best_b["end"],
+                "text": best_b["text"],
+                "confidence": best_b["confidence"],
+            })
+            continue
         merged.append(turn)
 
     for turn in turns_b_shifted:

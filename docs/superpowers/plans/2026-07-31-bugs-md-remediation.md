@@ -38,15 +38,15 @@ output's filename only, not the CLI argument surface.
 
 ## Task 2 — same-speaker containment guard
 
-- [ ] 2.1 Measure the guard's yield on the captured real turns, at the full-containment
+- [x] 2.1 Measure the guard's yield on the captured real turns, at the full-containment
       criterion, sweeping the minimum-length floor. Record the chosen floor and why.
-- [ ] 2.2 Test: a non-replaced same-speaker A turn whose text is fully contained in the
+- [x] 2.2 Test: a non-replaced same-speaker A turn whose text is fully contained in the
       winning B text is consumed, not emitted twice.
-- [ ] 2.3 Test: the guard does NOT fire cross-speaker (it would delete the correctly
+- [x] 2.3 Test: the guard does NOT fire cross-speaker (it would delete the correctly
       attributed copy and keep the wrong one).
-- [ ] 2.4 Test: the guard does NOT fire below the length floor (no back-door smoothing).
-- [ ] 2.5 Fix: implement the guard in `merge_turns`.
-- [ ] 2.6 Mutation-test; re-measure redundancy on a real fused run.
+- [x] 2.4 Test: the guard does NOT fire below the length floor (no back-door smoothing).
+- [x] 2.5 Fix: implement the guard in `merge_turns`.
+- [x] 2.6 Mutation-test; re-measure redundancy on a real fused run.
 
 ## Task 3 — surface the fusion offset and its confidence
 
