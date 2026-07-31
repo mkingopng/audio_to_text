@@ -1,30 +1,43 @@
 # VALIDATE — "the pipeline is CPU-bound; can MLX accelerate it?"
 
 **Date:** 2026-07-31
-**Branch:** feature/mlx-whisper-gpu
-**Question posed:** the latest version is slow; is it CPU-bound, and can MLX fix it?
-**Verdict: the premise is FALSE.** The pipeline is GPU-bound and already saturates the
-GPU. MLX is already the ASR engine, and the diarizer already runs on the same GPU via
-MPS. There is no CPU-bound work of any consequence to move.
+**Branch:** feature/mlx-whisper-gpu (repo refactored to `src/audio_to_text/` mid-investigation)
+**Question:** the latest version is slow; is it CPU-bound, and can MLX fix it?
+
+**Answer: No, on both counts.** The pipeline is not CPU-bound. It is GPU-bound on a
+**fanless MacBook Air**, running at the thermal ceiling of the machine. MLX is already the
+ASR engine, and the diarizer already runs on the same GPU via MPS. There is no CPU-bound
+work of consequence to move, and no meaningful headroom for a different Metal API to
+recover.
+
+> **Status of this document.** Version 1 failed its contrarian review. The central defect:
+> it claimed the GPU was "saturated" on the strength of `ioreg` *Device Utilization %*,
+> which measures **time-residency** (is any command buffer in flight), not **occupancy**
+> (are the ALUs doing work) — and those diverge precisely for bandwidth-bound
+> autoregressive decode. It also dismissed a concurrency result using a thermal bias that
+> pointed the opposite way. This version replaces that evidence with `powermetrics` data
+> and an interleaved multi-process experiment, both of which happen to reach the same
+> conclusion by sounder means. §11 lists what remains unmeasured.
 
 ---
 
-## 1. Hardware and workload under test
+## 1. Hardware and workload
 
 | | |
 |---|---|
-| Machine | Apple M4 (base), 10 CPU cores (4P/6E), **10-core GPU**, 24 GB unified memory |
+| Machine | **MacBook Air (Mac16,12)** — Apple M4, 4P+6E CPU, **10-core GPU**, 24 GB, **fanless** |
+| Power | AC power, Low Power Mode off (verified — no free win there) |
 | ASR | `mlx-whisper` 0.4.3, `mlx-community/whisper-large-v3-turbo`, `word_timestamps=True` |
-| Diarization | `pyannote.audio` 4.0.7, `pyannote/speaker-diarization-3.1`, torch 2.12.1 on MPS |
+| Diarization | `pyannote.audio` 4.0.7, `speaker-diarization-3.1`, torch 2.12.1 on MPS |
 | Real inputs | two ~70 min recordings (4239 s and 4198 s) |
 | Probe slice | first 300 s of the meeting recording, 16 kHz mono WAV |
 
+The fanless part is not incidental — see §4.
+
 ## 2. Evidence — per-stage wall time vs process CPU time
 
-`cpu/wall` is the discriminator. A stage pegging cores shows a ratio ≥ 1; a stage
-*waiting on an accelerator* shows a ratio well below 1.
-
-`scratchpad/profile_stages.py 300`:
+`cpu/wall` discriminates: a stage pegging cores shows ≥ 1; a stage waiting on an
+accelerator shows well below 1. `RUSAGE_CHILDREN` is included, so ffmpeg's CPU is counted.
 
 ```
   [ffmpeg_extract]  wall=   0.11s cpu=   0.13s ratio= 1.17
@@ -38,189 +51,236 @@ MPS. There is no CPU-bound work of any consequence to move.
 pipeline wall total (excl. cpu-probe): 63.57s for 300s audio -> 4.72x realtime
 ```
 
-Share of pipeline wall time: **whisper 54.0%, diarization 38.5%, pipeline load 7.3%,
-everything else 0.2%.**
+Share of pipeline wall: **whisper 54.0%, diarization 38.5%, pipeline load 7.3%, rest 0.2%.**
 
-Three things follow immediately:
+1. **The heavy stages are not CPU-bound.** Ratios of 0.16 and 0.22 mean the process sat
+   idle awaiting the GPU ~80% of its wall time.
+2. **MPS is genuinely working, not silently falling back.** This was the real risk:
+   `load_diarization_pipeline` wraps `.to("mps")` in a bare `except` that would mask a
+   failure. Forcing the same pipeline to CPU takes **165.52 s vs 24.45 s — 6.8× slower**,
+   at ratio 3.30 (3.3 cores busy). The GPU path is live and earning its keep.
+3. **The pure-Python glue is free.** `align_words_to_speakers` is O(words × turns) and was
+   the most plausible CPU hot spot. It measured **0.01 s**. Scaled to the full 70 min
+   (819→~17 k words is 20.8×; 70→~1.7 k turns is 24.3×; product ≈ **505×**) it is ~5 s
+   against a ~15 min run. Not worth touching.
 
-1. **The two heavy stages are not CPU-bound.** Ratios of 0.16 and 0.22 mean the process
-   sat idle waiting on the GPU for ~80% of its wall time.
-2. **MPS is genuinely working, not silently falling back to CPU.** This was the specific
-   risk in `load_diarization_pipeline` (`transcribe.py:319-324`), whose `.to("mps")` is
-   wrapped in a bare `except` that would mask a failure. Forcing the same pipeline onto
-   CPU takes **165.52 s vs 24.45 s — 6.8× slower**, with a cpu/wall ratio of 3.30
-   (3.3 cores busy). The GPU path is real and is already earning its keep.
-3. **The pure-Python glue is free.** `align_words_to_speakers` is O(words × turns) and I
-   expected it to be a hot spot; it measured 0.01 s. Extrapolated to the full 70 min
-   (~17 k words × ~1.7 k turns, ~196× the slice's work) it is still ~2 s against a
-   ~15 min run. Not worth touching.
+## 3. Evidence — GPU state under load (`powermetrics`, sudo, user-supplied)
 
-## 3. Evidence — the GPU is *saturated*, so there is no headroom to exploit
-
-Low CPU usage alone doesn't prove the GPU is busy — it could be poorly occupied, in which
-case overlapping stages would be a free win. Sampling macOS `Device Utilization %` via
-`ioreg` during each stage (`scratchpad/probe_gpu_concurrency.py`):
+`ioreg` could not answer whether the GPU was working or merely occupied. `powermetrics`
+can. Five consecutive 1-second samples taken while the pipeline was running:
 
 ```
-idle baseline    gpu busy%: mean= 16.1 median= 17.0 max= 29.0
-whisper  34.40s  gpu busy%: mean= 94.9 median= 98.0 p90=100.0 max=100.0
-diarize  24.83s  gpu busy%: mean= 96.6 median= 98.0 p90=100.0 max=100.0
+GPU HW active residency:  98.13% 100.00% 100.00% 100.00% 100.00%
+GPU HW active frequency:    1399    1402    1325    1216    1225  MHz
+residency in top 1470MHz bin: 63%     67%     38%    1.5%    7.9%
+GPU SW requested state:   P9 94%  P9 100% P9 100% P9 100% P9 100%
+GPU idle residency:        1.87%   0.00%   0.00%   0.00%   0.00%
+GPU Power:                 11404   11085   11549   11856   11816  mW
 ```
 
-Both stages hold the GPU at **95–97% mean occupancy**. The M4's 10-core GPU is the
-binding constraint, and it is already pinned.
+Read together these say something the residency figure alone cannot:
 
-The concurrency test confirms it — running Whisper and pyannote in two threads:
+- The GPU is **active essentially 100% of the time**, idling ~0%.
+- Software is requesting the **maximum P-state (P9) continuously**.
+- Yet the **achieved clock falls 1402 → 1216 MHz within five seconds**, and time in the
+  top 1470 MHz bin collapses from 67% to 1.5%.
+- Sustained draw is **~11.1–11.9 W**.
+
+That is the signature of **power/thermal limiting**, not of a stalled or under-occupied
+device. A GPU idling on memory stalls would neither draw ~11.5 W nor be forced to
+downclock against a standing max-P-state request. The chip is delivering what its thermal
+envelope allows, and on a **fanless** chassis that envelope is the binding constraint.
+
+**Caveat:** these samples were taken during a running experiment without per-stage
+attribution, so they characterise the pipeline in aggregate, not Whisper vs pyannote
+separately.
+
+## 4. Evidence — concurrency does not help (interleaved, multi-process)
+
+The first attempt at this used two threads in one interpreter, ran once, in one order, and
+appeared to show an 8.3% win. That result was worthless: the threads shared a GIL with a
+sampler thread, and the concurrent condition ran *after* the sequential one, i.e. hotter
+and slower — a directional bias, not symmetric noise.
+
+Redone as two OS processes, six trials, order interleaved (SEQ/CON/CON/SEQ/SEQ/CON), 45 s
+cooldowns:
 
 ```
-sequential total = 59.24s
-concurrent total = 54.32s   gpu busy%: mean= 99.1
-  (whisper 34.40 -> 54.32s, diarize 24.83 -> 40.34s: both stretch, nothing is free)
+trial 1 [seq]  63.44s      sequential median = 65.47s  (min 63.44, max 69.72)
+trial 2 [con]  73.40s      concurrent median = 73.40s  (min 60.92, max 86.67)
+trial 3 [con]  86.67s
+trial 4 [seq]  69.72s      >>> saving = -7.93s (-12.1%)
+trial 5 [seq]  65.47s
+trial 6 [con]  60.92s
 ```
 
-That nominal 8.3% is **inside measurement noise** (see §5) and should be treated as zero.
-Each stage slowed by roughly the amount the other gained: work was time-sliced on a
-saturated device, not overlapped.
+**Concurrency is 12% slower**, and its spread (60.9–86.7 s) is far wider than the effect
+being chased. Under a fixed power budget, overlapping two GPU workloads cannot create
+throughput — it only adds contention. This is consistent with §3 and inconsistent with the
+"under-occupied GPU" hypothesis.
 
-## 4. Evidence — the obvious "reduce GPU work" levers are already optimal or negative
+Note the honest ordering: the *biased* experiment favoured my conclusion's opposite, and
+the *corrected* experiment favours it. Both were run; both are reported.
 
-Since the GPU is the constraint, only doing *less GPU work* can help. Both cheap levers
-were measured and both are losses (`probe_reduce_work.py`, `probe_pyannote_tunables.py`):
+## 5. Evidence — reducing GPU work: what was tried
 
 | Lever | Result | Verdict |
 |---|---|---|
-| Whisper 4-bit weights (`...turbo-q4`) | 43.85 s vs 39.86 s fp16 (both cached, back-to-back) | **Slower** — dequantization costs more than the bandwidth it saves at this size |
-| ↳ its output fidelity | text similarity **0.525** vs fp16 baseline | Disqualifying on its own — a different transcript, not a faster one |
-| Whisper 8-bit (`...turbo-q8`) | 404 — repo does not exist | N/A |
-| `segmentation/embedding_batch_size` 32→64 | 29.28 s → 34.77 s | **Slower** |
-| ↳ 32→128 | 29.28 s → 46.38 s | **Much slower** — bigger batches thrash a saturated GPU |
+| Whisper 4-bit (`turbo-q4`), cached, back-to-back vs fp16 | **43.85 s vs 39.86 s** | Slower |
+| ↳ fidelity | similarity **0.525** vs fp16, 824 words vs 819 | Disqualifying |
+| Whisper 8-bit (`turbo-q8`) | 404, repo absent | N/A |
+| `segmentation/embedding_batch_size` 32→64 | 29.28 → 34.77 s | Slower |
+| ↳ 32→128 | 29.28 → 46.38 s | Much slower |
+| pyannote fp16 (`half()` the models) | `pipeline._models` is empty on 4.0.7 — no handle found | Not tested |
 
-The shipped configuration (fp16 turbo, batch size 32) is already the best of the
-measured options.
+On q4: word count is 824 vs 819, so the slower time is *not* an artifact of degenerate
+looping — the model decoded a comparable amount of text, differently and more slowly. The
+batch sweep ran in ascending order so drift inflates part of it, but 29.28 → 46.38 s is far
+outside the noise band, so its direction holds.
 
-## 5. Measurement variance — stated so §3 and §4 aren't over-read
+The shipped configuration (fp16 turbo, batch 32) is the best of the measured options.
 
-Repeated identical measurements across the session, in chronological order:
+## 6. Measurement variance — stated so nothing above is over-read
 
-- Whisper fp16, 300 s slice: **34.36, 34.40, 34.80, 39.86 s** (spread ~16%)
-- Diarization MPS, 300 s slice: **24.45, 24.83, 26.90, 29.28 s** (spread ~20%)
+Repeated identical measurements, chronological:
 
-Both drift *monotonically upward* over a session of sustained GPU load — consistent with
-thermal throttling on a passively-constrained M4. **Consequences:** (a) any claimed win
-under ~20% is unproven without repeated interleaved trials; the 8.3% concurrency result
-does not clear that bar. (b) The §4 batch-size sweep ran in ascending order, so part of
-that degradation is drift — but 29.28→46.38 s is far outside the noise band, so the
-direction of that conclusion holds.
+- Whisper fp16, 300 s slice: **34.36, 34.40, 34.80, 39.86 s** (~16% spread)
+- Diarization MPS, 300 s slice: **24.45, 24.83, 26.90, 29.28 s** (~20% spread)
 
-## 6. Root cause of the slowness
+Both drift monotonically upward across a session — the same throttling §3 shows directly.
+**Any claimed win under ~20% is unproven without repeated interleaved trials.** That
+standard is applied uniformly here: it is why the 8.3% thread result was discarded, why
+the −12.1% figure is quoted from medians over six interleaved trials, and why the Amdahl
+estimate in §7 is given as a range rather than a point.
 
-Not a defect, and not a misplaced workload. **The work is genuinely large and the machine
-is small for it:**
+## 7. Why MLX cannot be the answer
 
-- Sustained throughput is **4.72× realtime** for one source, on a saturated 10-core GPU.
-- A 70-minute recording therefore costs **~15 minutes** per source.
-- `run_fusion` (`fusion.py:192-201`) processes both sources **sequentially and in full** —
-  two ASR passes and two diarization passes — so the fusion path costs **~30 minutes**.
+1. **Whisper is already on MLX** — 54% of runtime is `mlx_whisper.transcribe` on Metal.
+2. **The diarizer is already on the GPU** via torch-MPS, verified 6.8× faster than CPU
+   (§2). Porting it to MLX changes which Metal API issues the work, not whether the GPU
+   does it.
+3. **Amdahl caps the prize.** Diarization is 38.5% of slice wall time. On a full-length
+   run the fixed `pyannote_load` cost (4.63 s) shrinks from 7.3% to ~0.55%, pushing
+   diarization's real share to ~**41%**. A realistic MLX-vs-MPS efficiency gain of 1.2–1.5×
+   on an already power-capped GPU yields **6.9–13.8% end-to-end** — the same order as the
+   thermal drift in §6.
+4. **No Python pipeline exists.** MLX *weights* exist for both models pyannote 3.1 uses,
+   but the glue does not (§8). It would have to be reimplemented against a diarization
+   quality baseline this repo has spent days stabilising.
 
-That is the number the user is feeling. It is the product of the design (dual-source
-fusion doubles everything; `word_timestamps=True` is required for the word-level
-attribution the whole transcript quality rests on) meeting a base-model M4 GPU.
+Days of work on the risky half of the pipeline, for a gain the noise floor can hide.
 
-## 7. Answering the question as asked
-
-**"Can we use MLX to accelerate this?" — No, not meaningfully.**
-
-1. **Whisper is already on MLX.** 54% of the runtime is `mlx_whisper.transcribe`
-   (`transcribe.py:283`) already executing on Metal at ~95% GPU occupancy.
-2. **The diarizer is already on the GPU**, via torch-MPS, verified 6.8× faster than its
-   CPU path (§2). Porting it to MLX changes *which Metal API* issues the work, not
-   whether the work runs on the GPU.
-3. **Amdahl caps the prize.** Diarization is 38.5% of wall time. Even an infinitely fast
-   diarizer only buys 38.5%. A realistic MLX-vs-MPS efficiency gain on an
-   already-saturated GPU (~1.2–1.5×) yields **~8–13% end-to-end** — the same order as the
-   thermal noise in §5.
-4. **The cost is high and the risk is real.** Research (§8) found MLX *weights* for both
-   models pyannote 3.1 uses, but **no packaged Python MLX diarization pipeline**. The
-   glue — powerset decoding, sliding-window aggregation, embedding extraction,
-   agglomerative clustering — would have to be reimplemented, against a diarization
-   quality baseline this repo has spent days stabilising (`bugs.md`,
-   `docs/validate/2026-07-31-bugs-md-triage.md`).
-
-Spending days to reimplement the risky part of the pipeline for a gain the measurement
-noise can hide is a bad trade.
-
-## 8. What the web research actually found
+## 8. What the research found
 
 - **MLX-native diarization models exist; a Python pipeline does not.**
   [`mlx-community/pyannote-segmentation-3.0-mlx`](https://huggingface.co/mlx-community/pyannote-segmentation-3.0-mlx)
-  is **segmentation only** — its own card says full diarization "isn't included" — and it
-  ships no pip package, only a clone-this-repo snippet.
+  is **segmentation only** — its card states full diarization "isn't included" — and ships
+  no pip package.
   [`mlx-community/wespeaker-voxceleb-resnet34-LM`](https://huggingface.co/mlx-community/wespeaker-voxceleb-resnet34-LM)
-  supplies the embedding half. The one toolkit that assembles them,
-  [soniqo/speech-swift](https://github.com/soniqo/speech-swift), is **Swift**, not Python.
-- **[Senko](https://github.com/narcotic-sh/senko)** is the fastest option found (claims
-  1 h in 7.7 s on M3) — but it is **CoreML/ANE, not MLX**, its documented API exposes
-  only merged segments and **not the per-speaker embeddings** that `match_speakers`
-  (`fusion.py:54`) requires for Hungarian matching, and it targets Python 3.13. Adopting
-  it would mean rebuilding speaker matching, i.e. the fusion feature's core.
-- **pyannote 3.1 is the fast branch already.** It removed the onnxruntime dependency and
-  runs segmentation and embedding in pure PyTorch; the documented MPS caveat is
-  unimplemented-operator fallback, which our §2 CPU probe shows is not biting here.
+  supplies embeddings. The toolkit that assembles them,
+  [soniqo/speech-swift](https://github.com/soniqo/speech-swift), is **Swift**.
+- **[Senko](https://github.com/narcotic-sh/senko)** is the fastest option found (1 h in
+  7.7 s on M3) but is **CoreML/ANE, not MLX**; its documented API exposes only merged
+  segments, **not the per-speaker embeddings** `match_speakers` needs for Hungarian
+  matching. Adopting it means rebuilding the core of fusion.
+- **pyannote 3.1 is already the fast branch** — it dropped onnxruntime for pure PyTorch.
+  Its documented MPS caveat is operator fallback, which §2's CPU probe shows is not biting.
 
-## 9. Falsification — what would prove this diagnosis wrong, and what looking found
+## 9. Root cause of the slowness
 
-The diagnosis dies if **the GPU turns out not to be the binding constraint**. Three
-independent checks, each of which could have killed it:
+Not a defect and not a misplaced workload. **The work is large and the machine is a
+fanless laptop:**
 
-| Falsifier | Predicted if I'm WRONG (CPU-bound) | Measured |
+- Sustained throughput is **4.72× realtime** for one source at the thermal ceiling.
+- A 70-minute recording therefore costs **~15 minutes** per source.
+- `run_fusion` processes both sources **sequentially and in full** — two ASR passes and two
+  diarization passes — so fusion costs **~30 minutes**.
+
+`word_timestamps=True` is required for the word-level attribution the transcript quality
+rests on, and dual-source fusion doubles everything by design. Both are deliberate.
+
+## 10. Options considered and rejected
+
+**Rejected on measurement:** MLX port of diarization (§7); quantized weights (§5, slower
+*and* similarity 0.525); larger batches (§5); stage concurrency (§4, 12% slower).
+
+**Rejected on user decision (2026-07-31):** smaller or distilled Whisper checkpoints, and
+raising `segmentation_step` from its default 0.1. Maximum accuracy is a hard requirement
+for this project, and both trade output quality for speed. *Neither was measured* — the
+sweeps were cancelled once the requirement was stated.
+
+**Rejected on analysis — selective transcription of source B.** Fusion transcribes both
+recordings in full, though B's text is only used where it beats A's confidence on an
+overlapping same-speaker turn, or where B caught speech A missed. Gating B's ASR looked
+attractive until costed properly:
+
+- Whisper bills in **30-second windows**, not speech seconds. B-only speech (~160 recovered
+  turns) is scattered thinly across 70 minutes, so scattered spans defeat window packing.
+- A zero-loss confidence threshold is set by the **worst case, not the typical one**: a
+  single high-confidence A turn that B beat forces the threshold high enough to transcribe
+  most of the meeting anyway.
+- Recovering packing requires concatenating non-adjacent audio, which risks Whisper
+  bridging sentences across artificial joins — unacceptable under the accuracy requirement.
+
+Expected payoff: single-digit percent, for a large change to the most delicate part of the
+pipeline. Not built.
+
+**Environmental levers:** already on AC with Low Power Mode off. Improving cooling would
+genuinely help a thermally-capped fanless machine, but is impractical here.
+
+## 11. Falsification, and what remains unmeasured
+
+The diagnosis dies if the GPU is not the binding constraint. Three checks, each able to
+kill it:
+
+| Falsifier | Predicted if CPU-bound | Measured |
 |---|---|---|
-| cpu/wall on the heavy stages | ≥ 1.0 | **0.16 and 0.22** — refuted |
-| Forcing diarization to CPU | similar time (MPS not really used) | **6.8× slower** (165.52 s vs 24.45 s) — refuted |
-| GPU occupancy during the heavy stages | low, with headroom to overlap | **94.9% / 96.6% mean**, and concurrency returned nothing outside noise — refuted |
+| cpu/wall on heavy stages | ≥ 1.0 | **0.16 / 0.22** — refuted |
+| Forcing diarization to CPU | similar time | **6.8× slower** — refuted |
+| GPU state under load | idle/under-occupied, headroom to overlap | **~100% active, max P-state, downclocking, ~11.5 W**; concurrency **12% slower** — refuted |
 
-I also looked for the CPU-bound hot spot the premise predicts, in the one place it was
-most plausible — the O(words × turns) Python loop in `align_words_to_speakers`. It
-measured **0.01 s, 0.02% of wall time**. There is no CPU-bound stage to find.
+I also looked for the CPU hot spot the premise predicts, in the most plausible place — the
+O(words × turns) loop. It was **0.01 s, 0.02% of wall time**.
 
-**The diagnosis remains standing but is bounded**, and honesty requires naming what was
-*not* tested: the M4's GPU is small (10 cores). These ratios are hardware-specific. On a
-machine with a much larger GPU the balance could shift and the CPU-side glue could start
-to matter — but that is not the machine in question.
+**Not measured — stated so this document is not read as more than it is:**
 
-## 10. Highest-impact fix, justified by the evidence
+1. **No full-length run was completed.** Every timing here comes from a 300 s slice.
+   A full-length profile was started twice and killed both times (once to fix the analysis,
+   once when the work was called off). Linear extrapolation to 70 minutes is therefore
+   *unvalidated*, and two effects would make the real figure **worse**, not better:
+   sustained throttling beyond what a 35 s burst shows, and pyannote's agglomerative
+   clustering, which is superlinear in embedding count.
+2. **Fusion-only stages were never profiled** — `find_offset` (cross-correlating two ~67 M
+   sample envelopes), full-file `preprocess_audio`, `match_speakers`, `merge_turns`. The
+   "fusion = 2 × pipeline" claim in §9 is an assumption, not a measurement.
+3. **`segmentation_step` and alternative checkpoints were never swept** (§10).
+4. **`powermetrics` was not attributed per stage** (§3).
+5. **Source-A ‖ source-B concurrency** (as opposed to whisper ‖ diarize) was never run.
+   §4's result and §3's power ceiling make a positive outcome unlikely, but it is untested.
 
-Ranked by measured impact per unit of risk. **None of these is "port to MLX".**
+These do not threaten the headline finding — items 1–2 would only make the pipeline look
+slower, and 3–5 concern rejected options — but they bound what may be cited from here.
 
-1. **Don't re-run the pipeline you've already run.** The heaviest waste is not in a stage,
-   it's in repetition: every re-run of a 70-min file redoes ~15 min of saturated-GPU work
-   that produced identical intermediates. Caching ASR + diarization output per
-   (file content hash, model, params) makes iteration ~free and is **zero risk to
-   transcript quality** — it changes nothing about what is computed, only how often.
-   This is the only change that can plausibly deliver an order of magnitude.
-2. **Give the user progress and a cheap preview.** The 30-minute fusion run is currently
-   near-silent per source. A `--limit-seconds`-style probe run makes a bad `--num-speakers`
-   guess cost 1 minute instead of 30. Cost-of-being-wrong is a real component of the
-   felt slowness.
-3. **Only then, and only if the user will trade accuracy for speed:** `segmentation_step`
-   is 0.1, i.e. a 10 s window advancing 1 s — roughly 10× redundant segmentation compute.
-   Raising it is the single largest remaining GPU-work reduction, but it *will* move
-   diarization output, and this repo has just spent days stabilising that. Needs its own
-   measured accuracy/speed curve before anyone touches it.
+## 12. Recommendation
 
-**Explicitly rejected, with evidence:** MLX port of diarization (§7, ≤13% for days of
-work), quantized Whisper weights (§4, slower *and* similarity 0.525), larger batch sizes
-(§4, monotonically slower), stage concurrency (§3, within noise).
+Accept current performance on this hardware. The pipeline is correctly engineered for the
+machine it is on; the machine is a fanless laptop being asked to run ~2.3 hours of neural
+inference per fused meeting. **The effective fix is different hardware** — the user's own
+plan to move these runs to a cluster/Spark is the right answer, and no code change here
+competes with it.
 
 ---
 
 ## Reproduction
 
 ```bash
-uv run python scratchpad/profile_stages.py 300        # §2 stage table
-uv run python scratchpad/probe_gpu_concurrency.py     # §3 GPU occupancy + concurrency
-uv run python scratchpad/probe_reduce_work.py         # §4 quantization + fidelity
-uv run python scratchpad/probe_pyannote_tunables.py   # §4 batch sweep, §5 repeat timings
+uv run python scratchpad/profile_stages.py 300        # §2
+uv run python scratchpad/conc_driver.py               # §4 (interleaved, multi-process)
+uv run python scratchpad/probe_reduce_work.py         # §5 quantization + fidelity
+uv run python scratchpad/probe_pyannote_tunables.py   # §5 batch sweep, §6 repeat timings
+sudo powermetrics --samplers gpu_power -n 5 -i 1000   # §3 (requires sudo)
 ```
 
-Probe scripts live in the session scratchpad
-(`/private/tmp/claude-501/.../scratchpad/`) and are not committed.
+Probe scripts lived in the session scratchpad and are not committed. They import
+`audio_to_text.transcribe`; note the package moved from `src/` to `src/audio_to_text/`
+partway through this investigation.
