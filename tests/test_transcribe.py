@@ -276,7 +276,7 @@ def test_main_continues_batch_after_diarization_failure(tmp_path, capsys):
 
     with patch.object(t, "ensure_apple_silicon"), \
          patch.object(t, "gather_media", return_value=media_files), \
-         patch.object(t, "load_dotenv"), \
+         patch.object(t, "resolve_hf_token", return_value="fake-token"), \
          patch.object(t, "load_diarization_pipeline", return_value=object()), \
          patch.object(t, "preprocess_audio", side_effect=lambda media_path, tmp_dir, audio_filter: media_path), \
          patch.object(t, "run_whisper", return_value=fake_result), \
@@ -305,7 +305,7 @@ def _run_main_capturing_audio_filter(argv, tmp_path):
 
     with patch.object(t, "ensure_apple_silicon"), \
          patch.object(t, "gather_media", return_value=[Path("fake.m4a")]), \
-         patch.object(t, "load_dotenv"), \
+         patch.object(t, "resolve_hf_token", return_value="fake-token"), \
          patch.object(t, "load_diarization_pipeline", return_value=object()), \
          patch.object(t, "preprocess_audio", side_effect=fake_preprocess), \
          patch.object(t, "run_whisper", return_value=fake_result), \
@@ -404,7 +404,7 @@ def test_main_fuse_reports_clean_error_when_ffmpeg_missing(tmp_path, capsys):
 
     with patch.object(t, "ensure_apple_silicon"), \
          patch.object(t, "gather_media", return_value=[primary]), \
-         patch.object(t, "load_dotenv"), \
+         patch.object(t, "resolve_hf_token", return_value="fake-token"), \
          patch.object(t, "load_diarization_pipeline", return_value=object()), \
          patch("audio_to_text.fusion.run_fusion",
                side_effect=FileNotFoundError("ffmpeg not found on PATH; cannot extract audio.")):
@@ -431,7 +431,7 @@ def test_main_fuse_reports_clean_error_on_ffmpeg_failure(tmp_path, capsys):
 
     with patch.object(t, "ensure_apple_silicon"), \
          patch.object(t, "gather_media", return_value=[primary]), \
-         patch.object(t, "load_dotenv"), \
+         patch.object(t, "resolve_hf_token", return_value="fake-token"), \
          patch.object(t, "load_diarization_pipeline", return_value=object()), \
          patch("audio_to_text.fusion.run_fusion", side_effect=ffmpeg_error):
         exit_code = t.main([
@@ -459,7 +459,7 @@ def test_main_fuse_reports_clean_error_on_speaker_count_mismatch(tmp_path, capsy
 
     with patch.object(t, "ensure_apple_silicon"), \
          patch.object(t, "gather_media", return_value=[primary]), \
-         patch.object(t, "load_dotenv"), \
+         patch.object(t, "resolve_hf_token", return_value="fake-token"), \
          patch.object(t, "load_diarization_pipeline", return_value=object()), \
          patch("audio_to_text.fusion.run_fusion",
                side_effect=ValueError("len(embeddings_a) != len(embeddings_b): 6 vs 5")):
@@ -484,7 +484,7 @@ def test_main_fuse_reports_clean_error_when_diarization_pipeline_fails_to_load(t
 
     with patch.object(t, "ensure_apple_silicon"), \
          patch.object(t, "gather_media", return_value=[primary]), \
-         patch.object(t, "load_dotenv"), \
+         patch.object(t, "resolve_hf_token", return_value="fake-token"), \
          patch.object(t, "load_diarization_pipeline",
                        side_effect=RuntimeError("HF_TOKEN is not set. ...")):
         exit_code = t.main([

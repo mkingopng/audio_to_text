@@ -213,7 +213,7 @@ git commit -m "refactor: make audio_to_text an installable src-layout package"
 - Consumes: the `audio_to_text.transcribe` module from Task 1.
 - Produces: `resolve_hf_token() -> str | None` and `CONFIG_DIR: Path` (`~/.config/audio-to-text`). Task 4's README documents `CONFIG_DIR`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_token.py`:
 
@@ -280,12 +280,12 @@ def test_does_not_mutate_process_environment(monkeypatch, tmp_path):
     assert "HF_TOKEN" not in os.environ
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_token.py -v`
 Expected: FAIL — `ImportError: cannot import name 'resolve_hf_token'`
 
-- [ ] **Step 3: Implement the resolution chain**
+- [x] **Step 3: Implement the resolution chain**
 
 In `src/audio_to_text/transcribe.py`, change the dotenv import on line 41 from `from dotenv import load_dotenv` to:
 
@@ -326,7 +326,7 @@ def resolve_hf_token() -> str | None:
     return None
 ```
 
-- [ ] **Step 4: Update the error message**
+- [x] **Step 4: Update the error message**
 
 In `load_diarization_pipeline`, replace the `raise RuntimeError(...)` at lines 301-307 with:
 
@@ -340,7 +340,7 @@ In `load_diarization_pipeline`, replace the `raise RuntimeError(...)` at lines 3
         )
 ```
 
-- [ ] **Step 5: Replace both call sites**
+- [x] **Step 5: Replace both call sites**
 
 There are two identical blocks, in the `--fuse` branch and the batch branch. In each, replace:
 
@@ -359,17 +359,17 @@ with:
 
 (The batch-branch copy is indented one level less — match the surrounding indentation.)
 
-- [ ] **Step 6: Confirm load_dotenv is fully gone from the module**
+- [x] **Step 6: Confirm load_dotenv is fully gone from the module**
 
 Run: `grep -n "load_dotenv" src/audio_to_text/transcribe.py`
 Expected: no matches. `tests/test_environment.py` still imports `load_dotenv` from `dotenv` directly — that is correct and stays.
 
-- [ ] **Step 7: Run the tests**
+- [x] **Step 7: Run the tests**
 
 Run: `uv run pytest tests/test_token.py -v && uv run pytest -q`
 Expected: PASS, all green.
 
-- [ ] **Step 8: Install the token globally**
+- [x] **Step 8: Install the token globally**
 
 ```bash
 mkdir -p ~/.config/audio-to-text
@@ -379,7 +379,7 @@ chmod 600 ~/.config/audio-to-text/.env
 
 `chmod 600` because this file holds a credential and `~/.config` is not restricted by default.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add src/audio_to_text/transcribe.py tests/test_token.py

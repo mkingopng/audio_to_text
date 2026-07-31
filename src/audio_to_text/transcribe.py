@@ -41,12 +41,16 @@ from pathlib import Path
 
 import mlx_whisper
 import numpy as np
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 from tqdm import tqdm
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_INPUT_DIR = PROJECT_ROOT / "data"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output"
+
+# Where the Hugging Face token lives when this tool is called from another
+# project, which has no .env of its own.
+CONFIG_DIR = Path.home() / ".config" / "audio-to-text"
 
 # Friendly model names -> Hugging Face repos of MLX-converted Whisper weights.
 # Any value containing "/" is treated as a full HF repo id and used verbatim.
@@ -298,15 +302,40 @@ def extract_words(result: dict) -> list[dict]:
     return [word for segment in result["segments"] for word in segment["words"]]
 
 
+def resolve_hf_token() -> str | None:
+    """Find the Hugging Face token, first hit wins.
+
+    1. HF_TOKEN already in the environment
+    2. ./.env  -- lets the calling project supply its own
+    3. ~/.config/audio-to-text/.env  -- the global home for it
+
+    Step 3 is what makes this tool usable from another project: a bare
+    load_dotenv() only searches upward from the caller's cwd, so invoked from
+    somewhere else it silently finds nothing.
+
+    Uses dotenv_values rather than load_dotenv so reading a file never mutates
+    os.environ -- otherwise the lookup order would depend on call history.
+    """
+    token = os.environ.get("HF_TOKEN")
+    if token:
+        return token
+    for candidate in (Path.cwd() / ".env", CONFIG_DIR / ".env"):
+        if candidate.is_file():
+            value = dotenv_values(candidate).get("HF_TOKEN")
+            if value:
+                return value
+    return None
+
+
 def load_diarization_pipeline(hf_token: str | None):
     """Load the pretrained pyannote diarization pipeline, preferring the Apple GPU (MPS)."""
     if not hf_token:
         raise RuntimeError(
-            "HF_TOKEN is not set. Add it to the project's .env file (HF_TOKEN=...) and "
-            "make sure you've accepted the pyannote/speaker-diarization-3.1 model terms "
-            "at https://huggingface.co/pyannote/speaker-diarization-3.1 -- see the design "
-            "spec (docs/superpowers/specs/2026-07-29-speaker-diarization-fusion-design.md, "
-            "section 8) for details."
+            "HF_TOKEN is not set. Looked in: the HF_TOKEN environment variable, "
+            f"'{Path.cwd() / '.env'}', and '{CONFIG_DIR / '.env'}'. When calling this "
+            "tool from another project, put it in the last of those. Also make sure "
+            "you've accepted the pyannote/speaker-diarization-3.1 model terms at "
+            "https://huggingface.co/pyannote/speaker-diarization-3.1"
         )
     from pyannote.audio import Pipeline
     try:
@@ -469,9 +498,8 @@ def main(argv: list[str] | None = None) -> int:
         # module level, so importing it at the top here would be a circular import
         # that fails at load time. Do not hoist this.
         from audio_to_text.fusion import run_fusion
-        load_dotenv()
         try:
-            diarization_pipeline = load_diarization_pipeline(os.environ.get("HF_TOKEN"))
+            diarization_pipeline = load_diarization_pipeline(resolve_hf_token())
         except RuntimeError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
@@ -508,10 +536,8 @@ def main(argv: list[str] | None = None) -> int:
     do_preprocess = args.preprocess or args.denoise or args.audio_filter is not None
     audio_filter = args.audio_filter or (build_audio_filter(args.denoise) if do_preprocess else None)
     model_repo = resolve_model_repo(args.model)
-
-    load_dotenv()
     try:
-        diarization_pipeline = load_diarization_pipeline(os.environ.get("HF_TOKEN"))
+        diarization_pipeline = load_diarization_pipeline(resolve_hf_token())
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
