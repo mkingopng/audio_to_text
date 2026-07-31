@@ -15,7 +15,7 @@ from scipy.io import wavfile
 
 from audio_to_text.fusion import _rms_envelope
 
-CAP = Path(__file__).parent / "capture"
+from _capture import CAPTURE_DIR
 WINDOW = 0.1
 EXCLUSION_S = 5.0  # a rival peak must be this far from the argmax to count
 
@@ -38,7 +38,9 @@ def metrics(env_a: np.ndarray, env_b: np.ndarray) -> tuple[float, float, float]:
 
 
 def main() -> None:
-    wavs = sorted(CAP.glob("*.clean.wav"))
+    wavs = sorted(CAPTURE_DIR.glob("*.clean.wav"))
+    if len(wavs) < 2:
+        raise SystemExit(f"error: need two *.clean.wav in {CAPTURE_DIR}; run tools/capture_fusion_intermediates.py first.")
     a_path = [w for w in wavs if "Meeting" in w.name][0]
     b_path = [w for w in wavs if "Tag5" in w.name][0]
     rate_a, sa = wavfile.read(a_path)

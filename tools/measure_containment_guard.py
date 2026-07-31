@@ -14,9 +14,10 @@ import pickle
 import re
 from pathlib import Path
 
+from audio_to_text import fusion
 from audio_to_text.fusion import merge_turns, match_speakers, _shift_and_remap
 
-CAP = Path(__file__).parent / "capture" / "capture.pkl"
+from _capture import require_capture
 
 
 def norm(s: str) -> str:
@@ -56,7 +57,7 @@ def instrumented_merge(turns_a, turns_b_shifted):
 
 
 def main() -> None:
-    cap = pickle.load(open(CAP, "rb"))
+    cap = pickle.load(open(require_capture(), "rb"))
     turns_a = cap["a"]["grouped"]
     speaker_map_a_to_b = match_speakers(cap["a"]["embeddings"], cap["b"]["embeddings"])
     b_to_a = {b: a for a, b in speaker_map_a_to_b.items()}
@@ -66,9 +67,19 @@ def main() -> None:
     print(f"speaker map: {speaker_map_a_to_b}\n")
 
     merged, replacement = instrumented_merge(turns_a, turns_b_shifted)
-    production = merge_turns(turns_a, turns_b_shifted)
+
+    # This instrument deliberately models merge_turns WITHOUT the containment
+    # guard, because its job is to sweep the guard's settings -- so it is compared
+    # against production with the guard disabled. The replacement map it sweeps
+    # over is decided before the guard runs and is unaffected by it either way.
+    disabled = fusion._CONTAINMENT_MIN_CHARS
+    fusion._CONTAINMENT_MIN_CHARS = 10 ** 9
+    try:
+        production = merge_turns(turns_a, turns_b_shifted)
+    finally:
+        fusion._CONTAINMENT_MIN_CHARS = disabled
     assert merged == production, "INSTRUMENT DISAGREES WITH PRODUCTION -- numbers below are invalid"
-    print(f"instrument == production merge_turns  ({len(merged)} merged turns)")
+    print(f"instrument == production merge_turns, guard disabled  ({len(merged)} merged turns)")
     print(f"replacements (a_replaced): {len(replacement)}  "
           f"kept (a_kept): {len(turns_a) - len(replacement)}  "
           f"gap-fill (b_gapfill): {len(merged) - len(turns_a)}\n")

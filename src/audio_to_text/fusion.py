@@ -85,8 +85,16 @@ def _correlate_envelopes(
     best_rival = float(np.max(rivals))
 
     peak = float(correlation[peak_index])
-    confidence = peak / best_rival if best_rival > 0 else float("inf")
-    return offset, confidence
+    if not np.isfinite(best_rival) or best_rival <= 0.0:
+        # Nothing survived the exclusion mask (both recordings are shorter than
+        # the window), or every rival is silence. Either way there is no
+        # independent peak to judge this one against, so the alignment is
+        # UNMEASURABLE -- which must score as untrustworthy, not as perfect.
+        # Returning infinity here would make two unrelated clips report a
+        # flawless alignment and suppress the warning: the exact failure this
+        # metric exists to catch, inverted.
+        return offset, 0.0
+    return offset, peak / best_rival
 
 
 def find_offset(wav_a: Path, wav_b: Path, *, window_seconds: float = 0.1) -> float:

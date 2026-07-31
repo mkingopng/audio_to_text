@@ -35,7 +35,7 @@ from audio_to_text.fusion import (
 )
 from audio_to_text.transcribe import overlap_seconds, relabel_speakers
 
-CAP = Path(__file__).parent / "capture" / "capture.pkl"
+from _capture import require_capture
 MIN_SHARED, MIN_FRACTION, MAX_DISTANCE = 40, 0.5, 5
 
 
@@ -89,7 +89,7 @@ def tagged_merge(turns_a, turns_b_shifted):
 
 
 def main() -> None:
-    cap = pickle.load(open(CAP, "rb"))
+    cap = pickle.load(open(require_capture(), "rb"))
     turns_a = cap["a"]["grouped"]
     a_to_b = match_speakers(cap["a"]["embeddings"], cap["b"]["embeddings"])
     turns_b = _shift_and_remap(cap["b"]["grouped"], cap["offset"], {v: k for k, v in a_to_b.items()})

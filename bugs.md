@@ -14,13 +14,23 @@ with a measured status.
 >
 > Reproduce with:
 > ```bash
-> uv run python tools/analyze_transcript.py <transcript.md>   # transcript-level
-> uv run python tools/capture_fusion_intermediates.py         # re-run + persist (slow)
-> uv run python tools/measure_containment_guard.py            # guard yield
-> uv run python tools/measure_smoothing.py                    # micro-turn candidates
-> uv run python tools/measure_offset_confidence.py            # offset null controls
-> uv run python tools/analyze_cross_speaker.py                # cross-speaker causes
+> # transcript-level numbers, straight from a rendered .md
+> uv run python tools/analyze_transcript.py <transcript.md>
+>
+> # pipeline-level numbers need a capture: re-runs ASR + diarization on both
+> # sources and persists every intermediate. Slow (hours), and writes ~270 MB of
+> # WAVs to data/fusion-capture/ -- set FUSION_CAPTURE_DIR to put it elsewhere.
+> uv run python tools/capture_fusion_intermediates.py
+>
+> uv run python tools/measure_offset_confidence.py   # offset + null controls
+> uv run python tools/measure_containment_guard.py   # guard yield by radius/floor
+> uv run python tools/measure_smoothing.py           # micro-turn candidates, with context
+> uv run python tools/analyze_cross_speaker.py       # cross-speaker pair origins
+> uv run python tools/render_capture.py out.md       # render a capture, to diff before/after
 > ```
+> Each analysis tool asserts its instrumented merge equals production `merge_turns`
+> on the same input before reporting anything — an instrument that disagrees with
+> what it measures is worthless.
 
 ---
 

@@ -12,7 +12,7 @@ from audio_to_text import fusion
 from audio_to_text.fusion import match_speakers, merge_turns, _shift_and_remap
 from audio_to_text.transcribe import relabel_speakers, render_markdown
 
-CAP = Path(__file__).parent / "capture" / "capture.pkl"
+from _capture import require_capture
 
 
 def main() -> None:
@@ -21,7 +21,7 @@ def main() -> None:
         # a floor nothing can reach == guard disabled, without touching the source
         fusion._CONTAINMENT_MIN_CHARS = 10 ** 9
 
-    cap = pickle.load(open(CAP, "rb"))
+    cap = pickle.load(open(require_capture(), "rb"))
     turns_a = cap["a"]["grouped"]
     a_to_b = match_speakers(cap["a"]["embeddings"], cap["b"]["embeddings"])
     turns_b = _shift_and_remap(cap["b"]["grouped"], cap["offset"], {v: k for k, v in a_to_b.items()})

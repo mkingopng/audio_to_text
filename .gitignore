@@ -250,4 +250,4 @@ poetry.lock
 .idea/
 
 # Subagent-driven-development scratch workspace (ledgers, briefs, review packages).
-.superpowers/
+.superpowers/data/fusion-capture/

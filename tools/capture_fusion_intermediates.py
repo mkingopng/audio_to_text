@@ -19,7 +19,9 @@ import time
 from pathlib import Path
 
 REPO = Path("/Users/mkingomac.com/Developer/GitHub/audio_to_text")
-OUT = Path(__file__).parent / "capture"
+from _capture import CAPTURE_DIR
+
+OUT = CAPTURE_DIR
 
 from audio_to_text.transcribe import (  # noqa: E402
     align_words_to_speakers,

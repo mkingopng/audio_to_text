@@ -16,7 +16,7 @@ from pathlib import Path
 from audio_to_text.fusion import match_speakers, merge_turns, _shift_and_remap
 from audio_to_text.transcribe import relabel_speakers, detect_repetition_loops
 
-CAP = Path(__file__).parent / "capture" / "capture.pkl"
+from _capture import require_capture
 
 BACKCHANNEL = {
     "yeah", "yep", "yes", "yup", "mm-hmm", "-hmm", "mhm", "uh-huh", "ok", "okay",
@@ -44,7 +44,7 @@ def eligible(turns, i):
 
 
 def main() -> None:
-    cap = pickle.load(open(CAP, "rb"))
+    cap = pickle.load(open(require_capture(), "rb"))
     a_to_b = match_speakers(cap["a"]["embeddings"], cap["b"]["embeddings"])
     turns_b = _shift_and_remap(cap["b"]["grouped"], cap["offset"], {v: k for k, v in a_to_b.items()})
     turns = relabel_speakers(merge_turns(cap["a"]["grouped"], turns_b))

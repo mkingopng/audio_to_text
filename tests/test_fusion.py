@@ -533,3 +533,32 @@ def test_run_fusion_smooths_micro_turns(tmp_path, monkeypatch):
     text = out_path.read_text(encoding="utf-8")
     assert "some of the other things" in text
     assert text.count("## Person") == 1
+
+
+def test_offset_confidence_reports_no_confidence_when_clips_are_too_short_to_judge(tmp_path):
+    """Fail-safe, not fail-silent.
+
+    The confidence metric masks out everything within 5s of the peak before
+    looking for a rival. If BOTH recordings are shorter than that window, every
+    candidate rival is masked away and there is nothing left to compare the peak
+    against. Treating that as infinite confidence would make two entirely
+    unrelated clips report a perfect alignment and suppress the warning -- the
+    exact failure this feature exists to catch, inverted.
+
+    An unmeasurable alignment must score as untrustworthy.
+    """
+    from audio_to_text.fusion import _correlate_envelopes, OFFSET_CONFIDENCE_THRESHOLD
+
+    rate = 1000
+    rng = np.random.default_rng(0)
+    for name in ("a", "b"):
+        # 4 seconds each -- shorter than the 5s rival-exclusion window
+        wavfile.write(tmp_path / f"{name}.wav", rate,
+                      rng.normal(0, 0.01, 4 * rate).astype(np.float32))
+
+    _offset, confidence = _correlate_envelopes(tmp_path / "a.wav", tmp_path / "b.wav")
+
+    assert confidence < OFFSET_CONFIDENCE_THRESHOLD, (
+        f"two unrelated 4s clips scored {confidence}; an alignment that cannot be "
+        "measured must not be reported as a confident one"
+    )
