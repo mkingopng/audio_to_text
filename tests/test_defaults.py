@@ -73,3 +73,41 @@ def test_gather_media_still_returns_an_explicitly_named_missing_file(monkeypatch
     missing = tmp_path / "nope.m4a"
 
     assert gather_media(missing) == [missing]
+
+
+def test_main_writes_into_data_transcriptions_by_default(monkeypatch, tmp_path):
+    """End-to-end through main() with no --output-dir: the whole point of the
+    feature. The unit tests above cover resolve_output_dir in isolation, but only
+    this one proves main() actually routes through it -- a main() that kept
+    writing to a stale constant would pass every other test in this file.
+    """
+    import audio_to_text.transcribe as t
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "meeting.m4a").touch()
+
+    fake_result = {
+        "segments": [
+            {"words": [{"word": "hi", "start": 0.0, "end": 0.5, "probability": 0.9}]},
+        ],
+    }
+
+    with monkeypatch.context() as m:
+        m.setattr(t, "ensure_apple_silicon", lambda: None)
+        m.setattr(t, "resolve_hf_token", lambda: "fake-token")
+        m.setattr(t, "load_diarization_pipeline", lambda token: object())
+        m.setattr(t, "preprocess_audio", lambda media_path, tmp_dir, audio_filter: media_path)
+        m.setattr(t, "run_whisper", lambda *a, **k: fake_result)
+        m.setattr(
+            t, "run_diarization",
+            lambda source, pipeline, *, num_speakers=None: (
+                [{"start": 0.0, "end": 1.0, "speaker": "SPEAKER_00"}], {}
+            ),
+        )
+        exit_code = t.main([])
+
+    assert exit_code == 0
+    assert (tmp_path / "data" / "transcriptions" / "meeting.md").is_file()
+    # and NOT in the project root, which is what it would do if the default were cwd
+    assert not (tmp_path / "meeting.md").exists()

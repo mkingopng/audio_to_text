@@ -843,6 +843,34 @@ git commit -m "feat: add transcribe-recording skill to the user mirror"
 
 ---
 
+## Amendment log
+
+In-flight changes to the plan as written. All five tasks shipped; none dropped.
+
+1. **Task 1, Step 7 — the import sweep was incomplete twice over.** The plan's sed covered
+   three idioms; the code had a fourth, `import src.transcribe as t`, appearing 8 times. It
+   also had `test_fuse_direct_script_invocation_resolves_fusion_import`, a test written
+   specifically to pin the `sys.path` hack that Step 6 deletes. Rewritten rather than
+   deleted — the risk it guards (a deferred import failing at runtime) outlives the hack —
+   and re-pointed at `python -m`, with `HOME` redirected so Task 2's global token fallback
+   could not later satisfy its assertion and hollow the test out.
+2. **Task 1 — `transcribe.py`'s own module docstring** carried five `uv run python
+   src/transcribe.py` examples. Not in the plan's file list; updated.
+3. **Task 2 — six existing tests stubbed `t.load_dotenv`,** which the task deletes. Not
+   anticipated. Re-pointed to stub `resolve_hf_token` with an explicit fake, which is
+   strictly stronger: the old stub still let a real ambient `HF_TOKEN` reach the code.
+4. **Task 3, Step 5 — simplified.** The plan proposed a `not target.exists()` branch with a
+   `target == default_input_dir()` comparison. Unnecessary: handling the missing directory
+   inside the `target is None` branch is equivalent and clearer, and an explicitly-named
+   path still falls through to `return [target]`.
+5. **Task 4 — added `prog="audio-to-text"` to the ArgumentParser.** Not in the plan. Under
+   `python -m`, argparse reported the tool as `transcribe.py` in its usage line — a name no
+   user types.
+6. **FINISH — added `test_main_writes_into_data_transcriptions_by_default`.** The plan's
+   Task 3 tests covered `resolve_output_dir` in isolation but nothing proved `main()`
+   routed through it; a `main()` still writing to a stale constant would have passed every
+   other test. Mutation-checked: replacing the call with `Path.cwd()` fails it.
+
 ## Acceptance (VERIFY phase)
 
 Runs after all five tasks, from a real project directory, with pasted output:
