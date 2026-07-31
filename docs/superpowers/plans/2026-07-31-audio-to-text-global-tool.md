@@ -739,7 +739,7 @@ The wrapper itself is machine-local and intentionally not tracked — the README
 - Consumes: the `audio-to-text` command from Task 4.
 - Produces: nothing code-facing. This is the last task.
 
-- [ ] **Step 1: Write the skill**
+- [x] **Step 1: Write the skill**
 
 Create `~/.claude/skills/transcribe-recording/SKILL.md`:
 
@@ -805,12 +805,12 @@ identify each person once from the first few minutes and find-and-replace throug
 Offer that; don't guess at names yourself.
 ```
 
-- [ ] **Step 2: Verify the skill is well-formed**
+- [x] **Step 2: Verify the skill is well-formed**
 
 Run: `head -4 ~/.claude/skills/transcribe-recording/SKILL.md`
 Expected: valid YAML frontmatter with `name:` and `description:`, matching the layout of the sibling skills in that directory.
 
-- [ ] **Step 3: Mirror it into Templates**
+- [x] **Step 3: Mirror it into Templates**
 
 ```bash
 mkdir -p ~/Developer/GitHub/Templates/user/claude/skills/transcribe-recording
@@ -818,7 +818,7 @@ cp ~/.claude/skills/transcribe-recording/SKILL.md \
    ~/Developer/GitHub/Templates/user/claude/skills/transcribe-recording/SKILL.md
 ```
 
-- [ ] **Step 4: Check for drift on this skill specifically**
+- [x] **Step 4: Check for drift on this skill specifically**
 
 ```bash
 diff ~/.claude/skills/transcribe-recording/SKILL.md \
@@ -831,7 +831,7 @@ Expected: no output.
 `meeting-minutes-workspace`. That is known, unrelated, and explicitly deferred to a
 separate workflow — do not fix it here.
 
-- [ ] **Step 5: Commit in Templates**
+- [x] **Step 5: Commit in Templates**
 
 ```bash
 cd ~/Developer/GitHub/Templates
