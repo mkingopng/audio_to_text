@@ -593,7 +593,7 @@ def test_run_fusion_warns_when_the_transcript_contains_a_repetition_loop(tmp_pat
         return wav_path, turns, {"SPEAKER_00": np.array([1.0, 0.0])}
 
     monkeypatch.setattr(fusion, "_process_source", fake_process_source)
-    monkeypatch.setattr(fusion, "find_offset", lambda wav_a, wav_b: 0.0)
+    monkeypatch.setattr(fusion, "_correlate_envelopes", lambda a, b: (0.0, 9.9))
 
     fusion.run_fusion(
         tmp_path / "a.mp4", tmp_path / "b.m4a",

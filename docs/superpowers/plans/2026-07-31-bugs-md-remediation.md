@@ -50,12 +50,12 @@ output's filename only, not the CLI argument surface.
 
 ## Task 3 — surface the fusion offset and its confidence
 
-- [ ] 3.1 Re-derive `peak/best_rival` on the captured WAVs plus self-built null controls.
+- [x] 3.1 Re-derive `peak/best_rival` on the captured WAVs plus self-built null controls.
       Choose the warn threshold from measured separation, not from the prior doc.
-- [ ] 3.2 Test: the confidence ratio separates a true pair from an unrelated pair.
-- [ ] 3.3 Fix: `_correlate_envelopes()` returns `(lag, ratio)`; `find_offset` keeps its
+- [x] 3.2 Test: the confidence ratio separates a true pair from an unrelated pair.
+- [x] 3.3 Fix: `_correlate_envelopes()` returns `(lag, ratio)`; `find_offset` keeps its
       signature; `run_fusion` reports the offset and warns below threshold.
-- [ ] 3.4 Mutation-test.
+- [x] 3.4 Mutation-test.
 
 ## Task 4 — fused output takes a `.fused.md` suffix
 

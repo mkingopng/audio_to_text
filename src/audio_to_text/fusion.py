@@ -7,6 +7,7 @@ the clearer source's text per overlapping turn.
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -37,8 +38,33 @@ def _rms_envelope(samples: np.ndarray, sample_rate: int, window_seconds: float) 
     return np.sqrt(np.mean(reshaped.astype(np.float64) ** 2, axis=1))
 
 
-def find_offset(wav_a: Path, wav_b: Path, *, window_seconds: float = 0.1) -> float:
-    """Seconds to ADD to source B's timestamps to align them onto source A's timeline."""
+# Below this peak/best_rival ratio, the alignment is reported as untrustworthy.
+# Measured on the real 70-minute pair against five negative controls built from
+# those same two recordings (so any separation is attributable to alignment, not
+# to recording character): true pair 1.5162, nulls 1.0002-1.0050. 1.2 clears the
+# null ceiling with margin and sits below the one true observation.
+#
+# WARN, never gate: the null floor is well characterised but the true-pair
+# distribution is n=1. peak/median (3.135 vs nulls to 2.098) and the z-score were
+# also measured and rejected -- they separate by less than a factor of two.
+OFFSET_CONFIDENCE_THRESHOLD = 1.2
+
+# A rival peak must be at least this far from the argmax to count as a rival,
+# rather than as the shoulder of the same peak.
+_RIVAL_EXCLUSION_SECONDS = 5.0
+
+
+def _correlate_envelopes(
+    wav_a: Path, wav_b: Path, *, window_seconds: float = 0.1
+) -> tuple[float, float]:
+    """Return (offset_seconds, confidence) for aligning source B onto source A.
+
+    confidence is peak / best_rival -- the correlation peak divided by the best
+    peak more than _RIVAL_EXCLUSION_SECONDS away from it. A genuinely shared
+    recording produces one dominant peak; two recordings with no shared acoustic
+    content produce a field of near-equal peaks, and the argmax among them is
+    meaningless even though it looks like a precise number.
+    """
     rate_a, samples_a = wavfile.read(wav_a)
     rate_b, samples_b = wavfile.read(wav_b)
     if rate_a != rate_b:
@@ -48,8 +74,23 @@ def find_offset(wav_a: Path, wav_b: Path, *, window_seconds: float = 0.1) -> flo
     envelope_b = _rms_envelope(samples_b, rate_b, window_seconds)
 
     correlation = signal.correlate(envelope_a, envelope_b, mode="full", method="fft")
-    lag_index = int(np.argmax(correlation)) - (len(envelope_b) - 1)
-    return lag_index * window_seconds
+    peak_index = int(np.argmax(correlation))
+    offset = (peak_index - (len(envelope_b) - 1)) * window_seconds
+
+    exclusion = int(_RIVAL_EXCLUSION_SECONDS / window_seconds)
+    rivals = correlation.copy()
+    rivals[max(0, peak_index - exclusion):peak_index + exclusion + 1] = -np.inf
+    best_rival = float(np.max(rivals))
+
+    peak = float(correlation[peak_index])
+    confidence = peak / best_rival if best_rival > 0 else float("inf")
+    return offset, confidence
+
+
+def find_offset(wav_a: Path, wav_b: Path, *, window_seconds: float = 0.1) -> float:
+    """Seconds to ADD to source B's timestamps to align them onto source A's timeline."""
+    offset, _confidence = _correlate_envelopes(wav_a, wav_b, window_seconds=window_seconds)
+    return offset
 
 
 def match_speakers(embeddings_a: dict[str, np.ndarray], embeddings_b: dict[str, np.ndarray]) -> dict[str, str]:
@@ -214,7 +255,19 @@ def run_fusion(
             diarization_pipeline=diarization_pipeline,
         )
 
-        offset = find_offset(wav_a, wav_b)
+        offset, confidence = _correlate_envelopes(wav_a, wav_b)
+        # Surface both on every run. Without this the tool computes the offset,
+        # uses it, and never shows it -- a misaligned pair fuses into a
+        # plausible-looking transcript with no signal that anything went wrong.
+        print(f"Offset: {offset:+.1f}s (alignment confidence {confidence:.2f})")
+        if confidence < OFFSET_CONFIDENCE_THRESHOLD:
+            print(
+                f"warning: weak alignment (confidence {confidence:.2f} < "
+                f"{OFFSET_CONFIDENCE_THRESHOLD}). The two recordings may not overlap, "
+                "or may not be of the same meeting. Check the fused transcript before "
+                "trusting it.",
+                file=sys.stderr,
+            )
         speaker_map_a_to_b = match_speakers(embeddings_a, embeddings_b)
         speaker_map_b_to_a = {b: a for a, b in speaker_map_a_to_b.items()}
         turns_b_shifted = _shift_and_remap(turns_b, offset, speaker_map_b_to_a)

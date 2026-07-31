@@ -1,4 +1,6 @@
 """Unit tests for audio_to_text/fusion.py -- dual-source sync, speaker matching, turn merging."""
+from pathlib import Path
+
 import pytest
 import numpy as np
 from scipy.io import wavfile
@@ -241,6 +243,92 @@ def test_merge_turns_replacement_does_not_produce_impossible_speaking_rate():
     )
 
 
+def _envelope_pair_wavs(tmp_path, rate=1000, seconds=120, shared=True, delay_seconds=8.0):
+    """Two WAVs that either do (shared) or do not (not shared) record the same room."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(0)
+    n = rate * seconds
+    world = rng.normal(0, 0.01, n).astype(np.float32)
+    # speech-like bursts, so the RMS envelope has structure to correlate on
+    for start in range(0, n - rate, rate * 3):
+        world[start:start + rng.integers(rate // 2, rate)] += rng.normal(0, 1.0)
+
+    delay = int(delay_seconds * rate)
+    a = world[:-delay] if delay else world
+    if shared:
+        b = world[delay:]
+    else:
+        other = rng.normal(0, 0.01, n).astype(np.float32)
+        for start in range(0, n - rate, rate * 3):
+            other[start:start + rng.integers(rate // 2, rate)] += rng.normal(0, 1.0)
+        b = other[delay:]
+
+    wav_a, wav_b = tmp_path / "a.wav", tmp_path / "b.wav"
+    wavfile.write(wav_a, rate, a)
+    wavfile.write(wav_b, rate, b)
+    return wav_a, wav_b
+
+
+def test_offset_confidence_separates_a_true_pair_from_unrelated_recordings():
+    """find_offset returns the argmax lag with no measure of how peaked the
+    correlation actually is, so two recordings that share no acoustic content
+    still yield a confident-looking number.
+
+    peak/best_rival (the best peak more than 5s from the argmax) is the metric
+    that separates them. Measured on the real 70-minute pair: 1.5162 for the true
+    pair against a null cluster at 1.0002-1.0050, built from those same two
+    recordings so the separation is attributable to alignment, not to recording
+    character. peak/median and the z-score were also measured and rejected --
+    they separate by less than a factor of two.
+    """
+    from audio_to_text.fusion import _correlate_envelopes
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        true_a, true_b = _envelope_pair_wavs(tmp_path / "t", shared=True)
+        _, true_confidence = _correlate_envelopes(true_a, true_b)
+
+        false_a, false_b = _envelope_pair_wavs(tmp_path / "f", shared=False)
+        _, false_confidence = _correlate_envelopes(false_a, false_b)
+
+    assert true_confidence > 1.2, f"true pair scored only {true_confidence:.4f}"
+    assert false_confidence < 1.2, f"unrelated pair scored {false_confidence:.4f}"
+
+
+def test_run_fusion_reports_the_offset_and_warns_when_alignment_is_weak(
+    tmp_path, monkeypatch, capsys
+):
+    """Pins the WIRING. src/fusion.py contained zero print statements and
+    run_fusion never surfaced the offset, so every run got no visibility and no
+    peak-quality signal. The recorded mitigation ("a human sanity-checks the
+    offset") was a one-off validation script run once on one recording pair --
+    a procedure, not a property of the tool.
+    """
+    from audio_to_text import fusion
+
+    def fake_process_source(media_path, tmp_dir, **kwargs):
+        wav_path = tmp_dir / (media_path.stem + ".clean.wav")
+        wav_path.write_bytes(b"")
+        turns = [{"speaker": "SPEAKER_00", "start": 0.0, "end": 1.0, "text": "hi", "confidence": 0.9}]
+        return wav_path, turns, {"SPEAKER_00": np.array([1.0, 0.0])}
+
+    monkeypatch.setattr(fusion, "_process_source", fake_process_source)
+    # a confident-looking lag with a flat correlation behind it
+    monkeypatch.setattr(fusion, "_correlate_envelopes", lambda a, b: (26.1, 1.002))
+
+    fusion.run_fusion(
+        tmp_path / "a.mp4", tmp_path / "b.m4a",
+        model_repo="x", language="en", initial_prompt=None, num_speakers=None,
+        output_dir=tmp_path / "out", diarization_pipeline=object(),
+    )
+
+    out, err = capsys.readouterr()
+    assert "26.1" in out, "the offset must be surfaced on every run"
+    assert "warning" in err.lower()
+    assert "overlap" in err.lower() or "align" in err.lower()
+
+
 def _stub_fusion(monkeypatch, tmp_path):
     """Patch out the ASR/diarization/offset work so run_fusion's output naming
     can be tested without a real 70-minute pipeline run."""
@@ -254,7 +342,7 @@ def _stub_fusion(monkeypatch, tmp_path):
         return wav_path, turns, {speaker: np.array([1.0, 0.0])}
 
     monkeypatch.setattr(fusion, "_process_source", fake_process_source)
-    monkeypatch.setattr(fusion, "find_offset", lambda wav_a, wav_b: 0.0)
+    monkeypatch.setattr(fusion, "_correlate_envelopes", lambda a, b: (0.0, 9.9))
     return fusion
 
 
@@ -308,7 +396,7 @@ def test_run_fusion_uses_separate_tmp_dirs_for_each_source(tmp_path, monkeypatch
         return wav_path, turns, {speaker: np.array([1.0, 0.0])}
 
     monkeypatch.setattr(fusion, "_process_source", fake_process_source)
-    monkeypatch.setattr(fusion, "find_offset", lambda wav_a, wav_b: 0.0)
+    monkeypatch.setattr(fusion, "_correlate_envelopes", lambda a, b: (0.0, 9.9))
 
     out_path = fusion.run_fusion(
         tmp_path / "meeting.mp4", tmp_path / "meeting.m4a",
