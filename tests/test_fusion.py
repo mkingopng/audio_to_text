@@ -687,6 +687,75 @@ def test_containment_guard_ignores_a_sibling_b_never_covered_in_time():
     assert survivor[0]["start"] == 1200.0
 
 
+def test_containment_guard_spares_a_sibling_only_partially_present_in_b():
+    """ENTIRE containment is the condition, not resemblance.
+
+    A sibling that merely shares a long opening with B's text is not a duplicate
+    of it -- the words B did not capture exist nowhere else, so consuming the
+    sibling deletes them outright. Any relaxation of `sibling in b_text` to a
+    similarity or prefix rule (SequenceMatcher over some ratio, `sibling[:20] in
+    b_text`, or accepting `b_text in sibling`) silently destroys real speech,
+    which is why the guard tests exact containment and nothing looser.
+
+    This is the axis the other four guard conditions' tests do not cover: they
+    pin the speaker, the radius, the length floor and the temporal overlap, and
+    every one of those can hold while the texts merely resemble each other.
+    """
+    sibling = "we can approve this version and send it to legal on friday"
+    turns_a = [
+        {"speaker": "S0", "start": 0.0, "end": 5.0, "text": "right okay", "confidence": 0.3},
+        # Same speaker, adjacent index, inside B's span, well over the length
+        # floor -- every other condition is satisfied. Only containment is not:
+        # B heard the first half and missed "send it to legal on friday".
+        {"speaker": "S0", "start": 5.0, "end": 9.0, "text": sibling, "confidence": 0.3},
+    ]
+    turns_b_shifted = [
+        {"speaker": "S0", "start": 0.1, "end": 9.5, "confidence": 0.95,
+         "text": "right okay we can approve this version and"},
+    ]
+
+    merged = merge_turns(turns_a, turns_b_shifted)
+
+    surviving_words = {word for turn in merged for word in turn["text"].lower().split()}
+    lost = {"send", "it", "to", "legal", "on", "friday"} - surviving_words
+    assert not lost, (
+        f"the guard consumed a sibling B only partially contained, deleting {sorted(lost)}. "
+        f"Merged output: {[t['text'] for t in merged]}"
+    )
+
+
+def test_containment_guard_spares_a_sibling_that_says_more_than_b_did():
+    """Containment is directional: the SIBLING must be inside B's text, never the
+    reverse.
+
+    When B captured less than the A sibling did, B's text is contained in the
+    sibling rather than the other way round. The sibling is then the fuller
+    record, and consuming it discards exactly the words B missed. Relaxing the
+    condition to `sibling in b_text or b_text in sibling` reads as symmetric and
+    harmless; it deletes the tail of every turn the second mic under-heard.
+    """
+    sibling = "we can approve this version and send it to legal on friday"
+    turns_a = [
+        {"speaker": "S0", "start": 0.0, "end": 5.0, "text": "right okay", "confidence": 0.3},
+        {"speaker": "S0", "start": 5.0, "end": 9.0, "text": sibling, "confidence": 0.3},
+    ]
+    turns_b_shifted = [
+        # B is more confident but heard only the opening -- its text sits ENTIRELY
+        # inside the sibling's.
+        {"speaker": "S0", "start": 0.1, "end": 9.5, "confidence": 0.95,
+         "text": "we can approve this version"},
+    ]
+
+    merged = merge_turns(turns_a, turns_b_shifted)
+
+    surviving_words = {word for turn in merged for word in turn["text"].lower().split()}
+    lost = {"and", "send", "it", "to", "legal", "on", "friday"} - surviving_words
+    assert not lost, (
+        f"the guard consumed the fuller sibling because B's text was inside IT, "
+        f"deleting {sorted(lost)}. Merged output: {[t['text'] for t in merged]}"
+    )
+
+
 def test_containment_guard_matches_across_casing_and_punctuation_differences():
     """The normalisation is the point, not decoration.
 
