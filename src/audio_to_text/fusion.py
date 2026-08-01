@@ -211,6 +211,23 @@ _CONTAINMENT_RADIUS = 2
 # is separate, riskier work -- "Daniel" may be a real one-word answer.
 _CONTAINMENT_MIN_CHARS = 20
 
+# How far apart, in seconds, the sibling and the A turn B replaced may sit.
+#
+# The duplication this guard removes is ONE utterance that A's diarization split
+# in two and B's kept whole, so the halves are consecutive stretches of speech --
+# separated at most by a short interjection from someone else, since
+# _group_consecutive flushes on every speaker change. Overlapping B's span is not
+# a sufficient bound: a long B turn spans minutes, and anything inside it with
+# matching text was consumed, so a speaker restating a stock phrase half a minute
+# later had that restatement deleted.
+#
+# JUDGEMENT CALL, not a measured one: 15s comfortably admits a normal
+# interjection while excluding a separate later restatement. It could not be
+# re-measured against the real 70-minute pair -- that audio is not committed (see
+# bugs.md) -- so it is set generously, biased toward keeping a duplicate over
+# deleting speech. Erring the other way destroys words that exist nowhere else.
+_CONTAINMENT_MAX_GAP_SECONDS = 15.0
+
 
 def _normalize_for_containment(text: str) -> str:
     """Casefold and drop punctuation/whitespace differences, so containment is
@@ -280,6 +297,17 @@ def merge_turns(turns_a: list[dict], turns_b_shifted: list[dict]) -> list[dict]:
                 turns_a[sibling_index]["start"], turns_a[sibling_index]["end"],
                 best_b["start"], best_b["end"],
             ) <= 0.0:
+                continue
+            # ...and it must sit near the A turn B actually replaced, not merely
+            # somewhere inside B's span. See _CONTAINMENT_MAX_GAP_SECONDS: the two
+            # halves of a split utterance are consecutive, so a sibling half a
+            # minute away is a restatement -- new speech -- rather than a duplicate.
+            gap = max(
+                turns_a[sibling_index]["start"] - turns_a[index]["end"],
+                turns_a[index]["start"] - turns_a[sibling_index]["end"],
+                0.0,
+            )
+            if gap > _CONTAINMENT_MAX_GAP_SECONDS:
                 continue
             sibling = _normalize_for_containment(turns_a[sibling_index]["text"])
             if len(sibling) >= _CONTAINMENT_MIN_CHARS and sibling in b_text:

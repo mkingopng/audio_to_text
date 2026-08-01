@@ -687,6 +687,46 @@ def test_containment_guard_ignores_a_sibling_b_never_covered_in_time():
     assert survivor[0]["start"] == 1200.0
 
 
+def test_containment_guard_ignores_a_distant_sibling_inside_b_span():
+    """Being inside B's span is not the same as being near the turn B replaced.
+
+    test_containment_guard_ignores_a_sibling_b_never_covered_in_time pins the
+    sibling sitting OUTSIDE B's span. But a long B turn makes that span wide, and
+    inside it the sibling can still be arbitrarily far away in time -- so the
+    guard's own stated principle ("A-turn indices say nothing about elapsed
+    time") was only enforced at the span boundary.
+
+    The duplication this guard exists to remove is one utterance that A's
+    diarization split in two and B's kept whole, so its halves are temporally
+    adjacent. A speaker RESTATING a stock phrase half a minute later is new
+    speech, not a duplicate -- and here it is A's own higher-confidence text,
+    deleted while the lower-confidence turn that displaced it survives.
+    """
+    restatement = "we should ship it on friday"
+    turns_a = [
+        {"speaker": "S0", "start": 0.0, "end": 5.0, "confidence": 0.3,
+         "text": "we should ship it on friday i think"},
+        {"speaker": "S1", "start": 5.0, "end": 6.0, "text": "hmm", "confidence": 0.9},
+        # 25 seconds later, but still inside B's 0.1-40.0 span, and only two
+        # A-turn indices away -- which is the NORMAL distance between two
+        # same-speaker turns, since _group_consecutive flushes on every change.
+        {"speaker": "S0", "start": 30.0, "end": 33.0, "text": restatement, "confidence": 0.9},
+    ]
+    turns_b_shifted = [
+        {"speaker": "S0", "start": 0.1, "end": 40.0, "confidence": 0.95,
+         "text": "we should ship it on friday i think"},
+    ]
+
+    merged = merge_turns(turns_a, turns_b_shifted)
+
+    survivor = [t for t in merged if t["text"] == restatement]
+    assert survivor, (
+        "a restatement 25s from the turn B replaced was consumed as a duplicate; "
+        f"that speech is now lost: {[t['text'] for t in merged]}"
+    )
+    assert survivor[0]["start"] == 30.0
+
+
 def test_containment_guard_spares_a_sibling_only_partially_present_in_b():
     """ENTIRE containment is the condition, not resemblance.
 
