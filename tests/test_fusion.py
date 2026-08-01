@@ -29,6 +29,62 @@ def test_find_offset_recovers_known_delay(tmp_path):
     assert abs(offset - delay_seconds) < 0.15  # within one default window_seconds
 
 
+def _speech_like(n: int, rate: int, rng, floor: float) -> np.ndarray:
+    """A non-negative, DC-heavy signal: bursts of "speech" over a steady noise floor.
+
+    This is what real preprocessed meeting audio produces once _rms_envelope runs
+    over it. The distinction matters -- see
+    test_find_offset_survives_a_dc_heavy_envelope.
+    """
+    t = np.arange(n) / rate
+    gate = np.zeros(n)
+    position = 0
+    while position < n:
+        speaking = int(rng.uniform(0.4, 1.2) * rate)
+        pause = int(rng.uniform(0.2, 0.8) * rate)
+        gate[position:position + speaking] = 1.0
+        position += speaking + pause
+    syllables = 0.5 * (1 + np.sin(2 * np.pi * 5 * t))
+    return np.abs(rng.normal(0, 1.0, n)) * syllables * gate + floor
+
+
+def _write_scaled(path: Path, rate: int, samples: np.ndarray) -> None:
+    wavfile.write(path, rate, (samples / max(samples.max(), 1e-9) * 0.5 * 32767).astype(np.int16))
+
+
+def test_find_offset_survives_a_dc_heavy_envelope(tmp_path):
+    """RMS envelopes are strictly non-negative with a large DC component, so a raw
+    cross-correlation is dominated by the triangular overlap-count term
+    (mean_a * mean_b * overlap_length) rather than by acoustic content. That term
+    peaks at MAXIMUM OVERLAP regardless of what was said, so a short quiet source
+    aligns to wherever it overlaps most -- not to where it actually belongs.
+
+    This is distinct from the confidence check: that validates the answer, this
+    decides where the peak lands, and a prominence test cannot catch it because
+    the wrong peak is broad and high.
+
+    The fixture is the documented use case -- a phone that joined late, recording
+    quietly across the room. Correlating the envelopes as-is recovers +6.8s
+    against a true +20.0s; subtracting the means recovers +20.0s.
+    """
+    rate = 1000  # low rate keeps this fast; the algorithm is rate-agnostic
+    rng = np.random.default_rng(0)
+    true_offset = 20.0
+
+    full = _speech_like(60 * rate, rate, rng, floor=0.05)
+    start = int(true_offset * rate)
+    window = full[start:start + 8 * rate]
+    # Quieter, and sitting on its own room-noise floor: a second mic across the room.
+    secondary = np.abs(window * 0.3 + 0.5 + rng.normal(0, 0.01, len(window)))
+
+    wav_a = tmp_path / "a.wav"
+    wav_b = tmp_path / "b.wav"
+    _write_scaled(wav_a, rate, full)
+    _write_scaled(wav_b, rate, secondary)
+
+    assert abs(find_offset(wav_a, wav_b) - true_offset) < 0.2
+
+
 def _unit_vector(angle_degrees: float) -> np.ndarray:
     radians = np.radians(angle_degrees)
     return np.array([np.cos(radians), np.sin(radians)])

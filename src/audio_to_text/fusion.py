@@ -56,6 +56,14 @@ OFFSET_CONFIDENCE_THRESHOLD = 1.2
 # rather than as the shoulder of the same peak.
 _RIVAL_EXCLUSION_SECONDS = 5.0
 
+# Only consider lags where the two envelopes overlap by at least this fraction of
+# the shorter one. At the extremes of a full correlation the sources share only a
+# handful of windows, so the value there is computed from almost no data and is
+# noise. Un-centred correlation hid this -- tiny overlap meant a tiny sum, so the
+# argmax never landed there -- but once the means are removed a near-empty overlap
+# can produce a large value by chance and win outright.
+_MIN_OVERLAP_FRACTION = 0.5
+
 
 def _correlate_envelopes(
     wav_a: Path, wav_b: Path, *, window_seconds: float = 0.1
@@ -76,13 +84,39 @@ def _correlate_envelopes(
     envelope_a = _rms_envelope(samples_a, rate_a, window_seconds)
     envelope_b = _rms_envelope(samples_b, rate_b, window_seconds)
 
-    correlation = signal.correlate(envelope_a, envelope_b, mode="full", method="fft")
-    peak_index = int(np.argmax(correlation))
+    # Mean-subtract before correlating. RMS envelopes are strictly non-negative
+    # with a large DC component, so correlating them as-is is dominated by the
+    # triangular overlap-count term (mean_a * mean_b * overlap_length), which
+    # peaks at MAXIMUM OVERLAP regardless of acoustic content. A short, quiet
+    # secondary then aligns to wherever it overlaps most rather than to where it
+    # belongs -- and the failure is invisible, because the wrong peak is broad
+    # and high rather than obviously degenerate.
+    correlation = signal.correlate(
+        envelope_a - envelope_a.mean(),
+        envelope_b - envelope_b.mean(),
+        mode="full",
+        method="fft",
+    )
+    # Restrict the search to lags with real overlap (see _MIN_OVERLAP_FRACTION).
+    # overlap[i] is the number of windows the two envelopes share at lag index i.
+    overlap = np.correlate(
+        np.ones(len(envelope_a)), np.ones(len(envelope_b)), mode="full"
+    )
+    usable = overlap >= _MIN_OVERLAP_FRACTION * min(len(envelope_a), len(envelope_b))
+    searchable = np.where(usable, correlation, -np.inf)
+
+    peak_index = int(np.argmax(searchable))
     offset = (peak_index - (len(envelope_b) - 1)) * window_seconds
 
+    # Mask by DISTANCE from the peak, not by slicing. A slice clamped with
+    # max(0, ...) leaves the far side unmasked whenever the peak sits within
+    # `exclusion` of index 0, so an arbitrary lag at the opposite end scores as an
+    # independent rival and inflates the confidence of an unmeasurable alignment.
     exclusion = int(_RIVAL_EXCLUSION_SECONDS / window_seconds)
-    rivals = correlation.copy()
-    rivals[max(0, peak_index - exclusion):peak_index + exclusion + 1] = -np.inf
+    lag_indices = np.arange(len(correlation))
+    rivals = np.where(
+        usable & (np.abs(lag_indices - peak_index) > exclusion), correlation, -np.inf
+    )
     best_rival = float(np.max(rivals))
 
     peak = float(correlation[peak_index])
