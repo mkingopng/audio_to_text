@@ -705,6 +705,57 @@ def test_containment_guard_ignores_a_sibling_b_never_covered_in_time():
     assert survivor[0]["start"] == 1200.0
 
 
+def test_gap_fill_keeps_a_b_turn_that_only_grazes_a_same_speaker_a_turn():
+    """The gap-fill test was binary: ANY overlap with a same-speaker A turn meant
+    "already represented", so one shared millisecond suppressed a whole B turn.
+
+    The case is the one the feature exists for. The Teams capture drops out
+    mid-sentence at 5s; the phone recorded straight through to 30s. They share
+    0.1s. B loses the confidence comparison, so A's fragment is kept -- and B is
+    then withheld as redundant, silently discarding 25 seconds of speech only one
+    microphone caught. README promises the opposite: "Speech only one microphone
+    caught is appended rather than dropped."
+
+    Appending re-states the few overlapping words. That is the deliberate trade:
+    a visible duplicate is recoverable by whoever reads the transcript, silent
+    deletion is not.
+    """
+    tail = "and then twenty five more seconds of speech nobody else recorded"
+    turns_a = [
+        {"speaker": "A0", "start": 0.0, "end": 5.0, "confidence": 0.9,
+         "text": "so the thing is"},
+    ]
+    turns_b_shifted = [
+        {"speaker": "A0", "start": 4.9, "end": 30.0, "confidence": 0.6,
+         "text": f"so the thing is {tail}"},
+    ]
+
+    merged = merge_turns(turns_a, turns_b_shifted)
+
+    assert any(tail in turn["text"] for turn in merged), (
+        "25s of B-only speech was dropped because it grazed an A turn by 0.1s: "
+        f"{[t['text'] for t in merged]}"
+    )
+
+
+def test_gap_fill_still_withholds_a_b_turn_a_already_covers():
+    """The other side of the ratio bound: a B turn genuinely representing the same
+    speech as an A turn must NOT be appended, or every well-covered moment is
+    emitted twice. This is what the original binary test got right."""
+    turns_a = [
+        {"speaker": "A0", "start": 0.0, "end": 10.0, "confidence": 0.9,
+         "text": "the whole utterance as source a heard it"},
+    ]
+    turns_b_shifted = [
+        {"speaker": "A0", "start": 0.2, "end": 9.8, "confidence": 0.6,
+         "text": "the whole utterance as source b heard it"},
+    ]
+
+    merged = merge_turns(turns_a, turns_b_shifted)
+
+    assert len(merged) == 1, f"B duplicated a moment A already covers: {merged}"
+
+
 def test_containment_guard_ignores_a_distant_sibling_inside_b_span():
     """Being inside B's span is not the same as being near the turn B replaced.
 

@@ -245,6 +245,16 @@ _CONTAINMENT_MIN_CHARS = 20
 # deleting speech. Erring the other way destroys words that exist nowhere else.
 _CONTAINMENT_MAX_GAP_SECONDS = 15.0
 
+# A B turn counts as "already represented" by A -- and so is withheld from the
+# gap-fill -- only once same-speaker A turns cover at least this much of it.
+#
+# The turn is appended whole or not at all: a turn dict carries one text and one
+# span, with no word-level timing left to split on, so the uncovered remainder
+# cannot be emitted by itself. Appending therefore re-states whatever A already
+# had. Set at half deliberately -- a visible duplicate is recoverable by whoever
+# reads the transcript, silently deleted speech is not.
+_GAPFILL_COVERED_FRACTION = 0.5
+
 
 def _normalize_for_containment(text: str) -> str:
     """Casefold and drop punctuation/whitespace differences, so containment is
@@ -359,12 +369,22 @@ def merge_turns(turns_a: list[dict], turns_b_shifted: list[dict]) -> list[dict]:
         # different speaker's A turn (e.g. cross-talk one mic caught and the
         # other didn't) is not "already represented" and must still be
         # appended, or that speech is silently lost.
-        overlaps_same_speaker_a = any(
-            a["speaker"] == turn["speaker"]
-            and overlap_seconds(turn["start"], turn["end"], a["start"], a["end"]) > 0
+        #
+        # By RATIO, not by any-overlap. A binary test let one shared millisecond
+        # suppress an entire B turn: when A dropped out mid-sentence and B
+        # recorded on for another 25 seconds, the 0.1s they shared was enough to
+        # withhold all of it. "Already represented" has to mean most of the turn
+        # is, not that some instant of it is.
+        duration = turn["end"] - turn["start"]
+        covered = sum(
+            overlap_seconds(turn["start"], turn["end"], a["start"], a["end"])
             for a in turns_a
+            if a["speaker"] == turn["speaker"]
         )
-        if not overlaps_same_speaker_a:
+        # Zero-duration turns keep their historical any-overlap treatment; see
+        # the OPEN bugs.md entry on zero-duration B turns.
+        covered_fraction = covered / duration if duration > 0 else (1.0 if covered > 0 else 0.0)
+        if covered_fraction < _GAPFILL_COVERED_FRACTION:
             merged.append(turn)
 
     merged.sort(key=lambda t: t["start"])
