@@ -81,7 +81,7 @@ measured on the fresh capture and each independently mutation-tested:
 
 | constraint | why, measured |
 |---|---|
-| **radius ≥ 2** in A-index terms | `_group_consecutive` flushes on every speaker change, so two same-speaker A turns are *never* adjacent. **0** same-speaker fires at radius 1, **13** at radius 2 |
+| **radius ≥ 2** in A-index terms | `group_consecutive` flushes on every speaker change, so two same-speaker A turns are *never* adjacent. **0** same-speaker fires at radius 1, **13** at radius 2 |
 | **same-speaker only** | an unrestricted guard fires on **28** cross-speaker cases, each time deleting the copy that may be the correctly attributed one |
 | **≥ 20 normalised chars** | fires are bimodal — ≤8 chars are micro-turns (`I`, `for`, `And`, `you know`, `Daniel`), ≥20 are restated content, and the gap between is empty |
 
@@ -153,7 +153,7 @@ Verified end-to-end: a single-file run then a fused run of the same primary now 
 **Improved:** `a4c3dc1` · ~23% of blocks still hold a single word
 
 Diarization emits very short turns (42 of 96 under 0.5 s on a sampled slice, p10 = 0.02 s);
-`_group_consecutive` faithfully starts a new block at each switch, so half the document's
+`group_consecutive` faithfully starts a new block at each switch, so half the document's
 headings introduce fragments like `"So"`, `"the"`, `"it?"`.
 
 Sandwiched ≤2-word, **exactly-zero-duration**, non-backchannel turns are

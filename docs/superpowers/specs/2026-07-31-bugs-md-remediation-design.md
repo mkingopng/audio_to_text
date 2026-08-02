@@ -121,7 +121,7 @@ Constraints, each measured rather than chosen:
   shorter block) reaches 20/23 pairs but destroys 840 characters of non-duplicated transcript,
   worst single case 120. Rejected: this is a transcription tool, and deleting speech to tidy
   duplication is the wrong trade.
-- **Radius 2 in A-index terms.** `_group_consecutive` flushes on every speaker change, so two
+- **Radius 2 in A-index terms.** `group_consecutive` flushes on every speaker change, so two
   same-speaker A turns are never adjacent; a radius-1 guard fires on **zero** same-speaker cases.
   Radius > 2 is unmeasured and is not used.
 - **Only unreplaced A turns can be consumed.** A turn that itself won a B replacement carries text
@@ -219,7 +219,7 @@ updated.
 **Defect.** Of 714 blocks in the reference output, 220 (31%) hold one word and 347 (49%) hold five
 or fewer, together carrying 4.8% of the text. Half the document's headings introduce fragments
 like `"So"`, `"the"`, `"it?"`. The cause is upstream of grouping: pyannote emits 42 of 96 turns
-shorter than 0.5 s (p10 = 0.02 s) on a sampled slice, and `_group_consecutive` faithfully starts a
+shorter than 0.5 s (p10 = 0.02 s) on a sampled slice, and `group_consecutive` faithfully starts a
 new block at each switch. Present in the single-file path too (16% one-word), roughly doubled by
 fusion.
 

@@ -106,7 +106,7 @@ Two of `bugs.md`'s three claims about it are nonetheless wrong:
 
 ### Why distance matters — and why revision 1 got this exactly backwards
 
-`_group_consecutive` (`src/transcribe.py:209-218`) flushes a turn on **every** speaker change.
+`group_consecutive` (`src/transcribe.py:209-218`) flushes a turn on **every** speaker change.
 Two same-speaker turns are therefore **always** separated by at least one intervening turn, so a
 same-speaker duplication can never appear as an *adjacent* pair. Revision 1 scanned adjacent
 pairs only, found `SAME=0`, and concluded `bugs.md` was misdiagnosed. **The scan was structurally
@@ -232,7 +232,7 @@ describes.
 This reframes the work: **fixing fragmentation should eliminate most of Finding 1 as a
 side-effect.** They are not independent line items to be ranked against each other.
 
-### Where fragmentation enters — NOT solely `_group_consecutive`
+### Where fragmentation enters — NOT solely `group_consecutive`
 
 Running the **single-file** path on a 4-minute slice (`27:00–31:00` of the phone recording,
 `--num-speakers 6`):
@@ -245,15 +245,15 @@ grouped blocks <=1 word: 5/31 (16%)   <=5 words: 12/31 (39%)
 
 1. **The diarization signal is itself fragmented** — pyannote emits **42 of 96 turns shorter than
    0.5 s**, p10 = **0.02 s**. `align_words_to_speakers` assigns words to these micro-turns, so
-   the flicker is *imported* before grouping runs. `_group_consecutive` faithfully groups what it
+   the flicker is *imported* before grouping runs. `group_consecutive` faithfully groups what it
    is given; a floor there absorbs the symptom into a neighbour rather than correcting the
    attribution.
 2. **Fragmentation is not a fusion artifact, but fusion roughly doubles it** — single-file 16%
    one-word vs fused 31%.
 3. **A third source exists that grouping cannot reach.** The output contains **76 adjacent
-   same-speaker block pairs**, which `_group_consecutive` can never emit (it flushes on speaker
+   same-speaker block pairs**, which `group_consecutive` can never emit (it flushes on speaker
    change). These come from `merge_turns` appending gap-fill B turns after grouping and never
-   re-grouping (`src/fusion.py:140-153`). No smoothing inside `_group_consecutive` touches them.
+   re-grouping (`src/fusion.py:140-153`). No smoothing inside `group_consecutive` touches them.
 
 ### Why a naive length threshold is destructive
 
@@ -357,7 +357,7 @@ lossless.
 | **Full containment (lossless)** | **6/23 (26%)** | 4/19 (21%) | **0** |
 | Detector criterion (lossy) | 20/23 (87%) | 14/19 (74%) | 840 / 394 chars |
 
-**A radius-1 guard fires on zero same-speaker cases.** `_group_consecutive` flushes on speaker
+**A radius-1 guard fires on zero same-speaker cases.** `group_consecutive` flushes on speaker
 change, so two same-speaker A turns are *never* adjacent — the same structural fact this document
 uses to demolish revision 1, which revision 3's own prescription then ignored. The guard needs
 **radius ≥ 2 in A-index terms**, and must decide what to do with the intervening other-speaker
