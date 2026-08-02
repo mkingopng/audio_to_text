@@ -287,3 +287,41 @@ def test_main_fuse_passes_smooth_through_to_run_fusion(monkeypatch, tmp_path):
     assert t.main([str(primary), "--fuse", str(secondary), "--smooth"]) == 0
 
     assert seen == [False, True]
+
+
+def test_main_fuse_passes_the_audio_filter_through_to_run_fusion(monkeypatch, tmp_path):
+    """--denoise, --preprocess and --audio-filter were computed AFTER the --fuse
+    branch returned, and _process_source hard-coded preprocess_audio(..., None).
+
+    So `--fuse phone.m4a --denoise` applied no high-pass, no loudness
+    normalisation and no denoising, printed no warning, and produced a transcript
+    the user believed had been cleaned. Fusion exists because one source is poor
+    and --denoise exists to rescue poor audio, so this is the combination most
+    likely to be reached for.
+    """
+    import audio_to_text.transcribe as t
+
+    monkeypatch.chdir(tmp_path)
+    primary = tmp_path / "teams.mp4"
+    primary.touch()
+    secondary = tmp_path / "phone.m4a"
+    secondary.touch()
+
+    seen: dict[str, object] = {}
+
+    def fake_run_fusion(a, b, **kwargs):
+        seen["audio_filter"] = kwargs.get("audio_filter", "NOT PASSED")
+        out = kwargs["output_dir"] / "teams.fused.md"
+        out.write_text("x")
+        return out
+
+    monkeypatch.setattr(t, "ensure_apple_silicon", lambda: None)
+    monkeypatch.setattr(t, "resolve_hf_token", lambda: "fake-token")
+    monkeypatch.setattr(t, "load_diarization_pipeline", lambda token: object())
+    monkeypatch.setattr("audio_to_text.fusion.run_fusion", fake_run_fusion)
+
+    assert t.main([str(primary), "--fuse", str(secondary), "--denoise"]) == 0
+    assert seen["audio_filter"] == t.build_audio_filter(True)
+
+    assert t.main([str(primary), "--fuse", str(secondary)]) == 0
+    assert seen["audio_filter"] is None, "no cleanup flags means no filter"

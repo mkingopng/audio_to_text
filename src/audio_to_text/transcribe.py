@@ -787,6 +787,16 @@ def main(argv: list[str] | None = None) -> int:
         # module level, so importing it at the top here would be a circular import
         # that fails at load time. Do not hoist this.
         from audio_to_text.fusion import run_fusion
+        # Computed here rather than after this branch: --denoise/--preprocess/
+        # --audio-filter used to be resolved below the early return, so the fusion
+        # path silently ignored every one of them.
+        fuse_filter = args.audio_filter or (
+            build_audio_filter(args.denoise)
+            if (args.preprocess or args.denoise or args.audio_filter is not None)
+            else None
+        )
+        if fuse_filter:
+            print(f"Preprocessing audio with ffmpeg filter: {fuse_filter}")
         try:
             diarization_pipeline = load_diarization_pipeline(resolve_hf_token())
         except RuntimeError as exc:
@@ -804,6 +814,7 @@ def main(argv: list[str] | None = None) -> int:
                 output_dir=output_dir,
                 diarization_pipeline=diarization_pipeline,
                 smooth=args.smooth,
+                audio_filter=fuse_filter,
             )
         except FileNotFoundError as exc:
             print(f"error: {exc}", file=sys.stderr)

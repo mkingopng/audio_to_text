@@ -371,8 +371,8 @@ def merge_turns(turns_a: list[dict], turns_b_shifted: list[dict]) -> list[dict]:
     return merged
 
 
-def _process_source(media_path: Path, tmp_dir: Path, *, model_repo, language, initial_prompt, num_speakers, diarization_pipeline):
-    wav_path = preprocess_audio(media_path, tmp_dir, None)
+def _process_source(media_path: Path, tmp_dir: Path, *, model_repo, language, initial_prompt, num_speakers, diarization_pipeline, audio_filter=None):
+    wav_path = preprocess_audio(media_path, tmp_dir, audio_filter)
     result = run_whisper(wav_path, model_repo=model_repo, language=language, initial_prompt=initial_prompt)
     words = extract_words(result)
     turns, embeddings = run_diarization(wav_path, diarization_pipeline, num_speakers=num_speakers)
@@ -391,6 +391,7 @@ def run_fusion(
     output_dir: Path,
     diarization_pipeline,
     smooth: bool = False,
+    audio_filter: str | None = None,
 ) -> Path:
     """Fuse two recordings of the same meeting into one Person-N Markdown transcript."""
     import tempfile
@@ -410,12 +411,12 @@ def run_fusion(
         wav_a, turns_a, embeddings_a = _process_source(
             primary_path, dir_a, model_repo=model_repo, language=language,
             initial_prompt=initial_prompt, num_speakers=num_speakers,
-            diarization_pipeline=diarization_pipeline,
+            diarization_pipeline=diarization_pipeline, audio_filter=audio_filter,
         )
         wav_b, turns_b, embeddings_b = _process_source(
             secondary_path, dir_b, model_repo=model_repo, language=language,
             initial_prompt=initial_prompt, num_speakers=num_speakers,
-            diarization_pipeline=diarization_pipeline,
+            diarization_pipeline=diarization_pipeline, audio_filter=audio_filter,
         )
 
         offset, confidence = _correlate_envelopes(wav_a, wav_b)
