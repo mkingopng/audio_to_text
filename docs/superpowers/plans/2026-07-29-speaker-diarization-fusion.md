@@ -236,9 +236,9 @@ git commit -m "feat: add word-level speaker attribution (align_words_to_speakers
 **Interfaces:**
 - Consumes: `align_words_to_speakers` output (list of word dicts with `"speaker"`).
 - Produces:
-  - `_group_consecutive(aligned_words: list[dict]) -> list[dict]` — each `{"speaker": str (original diarization id, NOT relabeled), "start": float, "end": float, "text": str, "confidence": float}`. Shared by both single-file grouping and fusion merging (Task 10 needs the un-relabeled form).
+  - `group_consecutive(aligned_words: list[dict]) -> list[dict]` — each `{"speaker": str (original diarization id, NOT relabeled), "start": float, "end": float, "text": str, "confidence": float}`. Shared by both single-file grouping and fusion merging (Task 10 needs the un-relabeled form).
   - `relabel_speakers(turns: list[dict]) -> list[dict]` — same shape, `"speaker"` renamed to `"Person 1"`.."Person N"` by first-appearance order in the input list. A speaker id seen again later keeps its **original** number (no renumbering drift).
-  - `group_into_turns(aligned_words: list[dict]) -> list[dict]` = `relabel_speakers(_group_consecutive(aligned_words))` — the single-file convenience entry point.
+  - `group_into_turns(aligned_words: list[dict]) -> list[dict]` = `relabel_speakers(group_consecutive(aligned_words))` — the single-file convenience entry point.
   - `render_markdown(turns: list[dict]) -> str` — turns must already be relabeled (i.e. `"speaker"` is `"Person N"`).
 
 - [x] **Step 1: Write the failing tests**
@@ -247,21 +247,21 @@ Append to `tests/test_transcribe.py`:
 
 ```python
 from src.transcribe import (
-    _group_consecutive,
+    group_consecutive,
     group_into_turns,
     relabel_speakers,
     render_markdown,
 )
 
 
-def test_group_consecutive_merges_same_speaker_words_into_one_turn():
+def testgroup_consecutive_merges_same_speaker_words_into_one_turn():
     aligned = [
         {"word": "Hello", "start": 0.0, "end": 0.5, "probability": 0.9, "speaker": "SPEAKER_00"},
         {"word": " there", "start": 0.5, "end": 1.0, "probability": 0.8, "speaker": "SPEAKER_00"},
         {"word": " hi", "start": 1.0, "end": 1.3, "probability": 0.7, "speaker": "SPEAKER_01"},
     ]
 
-    turns = _group_consecutive(aligned)
+    turns = group_consecutive(aligned)
 
     assert len(turns) == 2
     assert turns[0]["speaker"] == "SPEAKER_00"
@@ -316,7 +316,7 @@ def test_render_markdown_formats_heading_and_timestamp():
 - [x] **Step 2: Run it, confirm it fails**
 
 Run: `uv run pytest tests/test_transcribe.py -v`
-Expected: FAIL with `ImportError` for `_group_consecutive`, `group_into_turns`, `relabel_speakers`, `render_markdown`.
+Expected: FAIL with `ImportError` for `group_consecutive`, `group_into_turns`, `relabel_speakers`, `render_markdown`.
 
 - [x] **Step 3: Implement it**
 
@@ -328,7 +328,7 @@ def _join_words(words: list[str]) -> str:
     return "".join(words).strip()
 
 
-def _group_consecutive(aligned_words: list[dict]) -> list[dict]:
+def group_consecutive(aligned_words: list[dict]) -> list[dict]:
     """Merge consecutive same-speaker words into turns, keeping original speaker ids.
 
     Returned turns are NOT relabeled to "Person N" -- fusion (Task 10) needs the
@@ -385,7 +385,7 @@ def relabel_speakers(turns: list[dict]) -> list[dict]:
 
 def group_into_turns(aligned_words: list[dict]) -> list[dict]:
     """Single-file convenience entry point: group, then relabel to Person N."""
-    return relabel_speakers(_group_consecutive(aligned_words))
+    return relabel_speakers(group_consecutive(aligned_words))
 
 
 def _format_timestamp(seconds: float) -> str:
@@ -1168,7 +1168,7 @@ git commit -m "feat: add match_speakers (Hungarian-algorithm cross-source speake
 **Interfaces:**
 - Produces:
   - `_shift_and_remap(turns: list[dict], offset: float, speaker_map: dict[str, str]) -> list[dict]` — shifts `start`/`end` by `offset` and renames `"speaker"` via `speaker_map` (source B's local id → source A's local id namespace).
-  - `merge_turns(turns_a: list[dict], turns_b_shifted: list[dict]) -> list[dict]` — both inputs are `_group_consecutive`-shaped (un-relabeled, with `"confidence"`), `turns_b_shifted` already shifted/remapped into A's namespace via `_shift_and_remap`. Source A's turns define the canonical turn boundaries; a turn is replaced by B's overlapping text only when B's confidence is strictly higher. Any B turn that doesn't overlap *any* A turn (A missed that speaker/moment entirely) is appended and the result re-sorted by `start`.
+  - `merge_turns(turns_a: list[dict], turns_b_shifted: list[dict]) -> list[dict]` — both inputs are `group_consecutive`-shaped (un-relabeled, with `"confidence"`), `turns_b_shifted` already shifted/remapped into A's namespace via `_shift_and_remap`. Source A's turns define the canonical turn boundaries; a turn is replaced by B's overlapping text only when B's confidence is strictly higher. Any B turn that doesn't overlap *any* A turn (A missed that speaker/moment entirely) is appended and the result re-sorted by `start`.
 
 - [x] **Step 1: Write the failing test**
 
@@ -1296,7 +1296,7 @@ Add:
 ```python
 from src.transcribe import (
     align_words_to_speakers,
-    _group_consecutive,
+    group_consecutive,
     extract_words,
     preprocess_audio,
     relabel_speakers,
@@ -1312,7 +1312,7 @@ def _process_source(media_path: Path, tmp_dir: Path, *, model_repo, language, in
     words = extract_words(result)
     turns, embeddings = run_diarization(wav_path, diarization_pipeline, num_speakers=num_speakers)
     aligned = align_words_to_speakers(words, turns)
-    return wav_path, _group_consecutive(aligned), embeddings
+    return wav_path, group_consecutive(aligned), embeddings
 
 
 def run_fusion(
