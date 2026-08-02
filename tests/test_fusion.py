@@ -147,6 +147,24 @@ def test_match_speakers_raises_on_mismatched_sizes():
         match_speakers(embeddings_a, embeddings_b)
 
 
+def test_match_speakers_names_the_speaker_when_pyannote_returns_a_zero_embedding():
+    """pyannote pads with zero-vector embeddings when it finds fewer voice
+    clusters than speakers -- documented in its speaker_diarization pipeline, and
+    likeliest in exactly the crowded cross-talking meeting fusion is for.
+
+    A zero norm divides to an all-NaN row. NaN is not an exception: it
+    propagates silently into the cost matrix and only surfaces as
+    linear_sum_assignment's "matrix contains invalid numeric entries", several
+    steps and (in production) two full ASR + diarization passes later. The user
+    is then told nothing they can act on.
+    """
+    embeddings_a = {"A_0": _unit_vector(0), "A_1": _unit_vector(90)}
+    embeddings_b = {"B_0": _unit_vector(0), "B_1": np.array([0.0, 0.0])}
+
+    with pytest.raises(ValueError, match="no usable voice embedding.*B_1"):
+        match_speakers(embeddings_a, embeddings_b)
+
+
 from audio_to_text.fusion import _shift_and_remap, merge_turns
 
 

@@ -643,7 +643,13 @@ def run_diarization(
     ]
     turns.sort(key=lambda t: t["start"])
 
-    speaker_labels = sorted(diarization.labels())
+    # labels() verbatim, NOT sorted(labels()). pyannote reorders the embedding
+    # rows to match this exact sequence, and it sorts with key=str -- re-sorting
+    # with the default comparator can only preserve that correspondence or break
+    # it. The two agree for "SPEAKER_NN" strings and disagree for the integer
+    # labels pyannote also documents, where every embedding would silently
+    # attach to the wrong speaker.
+    speaker_labels = diarization.labels()
     embeddings = {label: embeddings_array[i] for i, label in enumerate(speaker_labels)}
 
     if num_speakers is not None and len(speaker_labels) != num_speakers:

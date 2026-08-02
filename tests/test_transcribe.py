@@ -196,7 +196,11 @@ class _FakeDiarization:
             yield _FakeTurn(start, end), None, label
 
     def labels(self):
-        return sorted({label for _, _, label in self._tracks})
+        # key=str, exactly as pyannote.core.Annotation.labels does it. The
+        # distinction is invisible for "SPEAKER_NN" strings and decisive for
+        # anything else -- see
+        # test_run_diarization_keeps_pyannote_label_order_for_non_string_labels.
+        return sorted({label for _, _, label in self._tracks}, key=str)
 
 
 class _FakeDiarizeOutput:
@@ -225,6 +229,35 @@ def test_run_diarization_parses_pipeline_output_sorted_by_start():
     assert set(embeddings.keys()) == {"SPEAKER_00", "SPEAKER_01"}
     assert np.array_equal(embeddings["SPEAKER_00"], np.array([1.0, 0.0]))
     assert np.array_equal(embeddings["SPEAKER_01"], np.array([0.0, 1.0]))
+
+
+def test_run_diarization_keeps_pyannote_label_order_for_non_string_labels():
+    """The embeddings array's row order is pyannote's, and it is defined by
+    diarization.labels() -- which sorts with key=str, not naturally. pyannote
+    reorders its centroids to match that exact order before returning them
+    (speaker_diarization.py: "re-order centroids so that they match the order
+    given by diarization.labels()").
+
+    Re-sorting that already-sorted list with a different comparator can only
+    preserve the correspondence or destroy it. For "SPEAKER_NN" strings the two
+    agree, which is why this went unnoticed; pyannote documents labels as
+    "strings (or mix of strings and integers when reference is available)", and
+    for integers they disagree: sorted([2, 10]) is [2, 10] but pyannote ordered
+    the rows [10, 2]. Every embedding then attaches to the wrong speaker,
+    match_speakers returns a wrong permutation, and fusion misattributes every
+    turn -- confidently, with no error.
+    """
+    tracks = [(0.0, 5.0, 2), (5.0, 9.0, 10)]
+    # pyannote's row order is labels() order: key=str puts 10 before 2.
+    embeddings_array = np.array([[0.0, 1.0], [1.0, 0.0]])  # row 0 -> 10, row 1 -> 2
+
+    def fake_pipeline(path, **kwargs):
+        return _FakeDiarizeOutput(_FakeDiarization(tracks), embeddings_array)
+
+    _turns, embeddings = run_diarization(Path("fake.wav"), fake_pipeline)
+
+    assert np.array_equal(embeddings[10], np.array([0.0, 1.0]))
+    assert np.array_equal(embeddings[2], np.array([1.0, 0.0]))
 
 
 def test_run_diarization_omits_num_speakers_when_not_given():

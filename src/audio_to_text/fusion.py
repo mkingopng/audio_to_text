@@ -160,6 +160,23 @@ def match_speakers(embeddings_a: dict[str, np.ndarray], embeddings_b: dict[str, 
     matrix_a = np.stack([embeddings_a[label] for label in labels_a])
     matrix_b = np.stack([embeddings_b[label] for label in labels_b])
 
+    # pyannote pads with ZERO-VECTOR embeddings when clustering yields fewer
+    # centroids than speakers -- which is exactly what a crowded, cross-talking
+    # meeting produces. Dividing by a zero norm gives a silent RuntimeWarning and
+    # an all-NaN row, and the NaN only surfaces several steps later as
+    # linear_sum_assignment's "matrix contains invalid numeric entries" -- after
+    # both sources have already been through ASR and diarization. Name the
+    # speaker instead, while the message can still point at something.
+    for label, matrix in ((labels_a, matrix_a), (labels_b, matrix_b)):
+        norms = np.linalg.norm(matrix, axis=1)
+        degenerate = [label[i] for i in np.flatnonzero(norms == 0.0)]
+        if degenerate:
+            raise ValueError(
+                f"no usable voice embedding for speaker(s) {degenerate}: pyannote "
+                "returned a zero vector, which happens when it finds fewer voice "
+                "clusters than speakers. Re-run with an explicit --num-speakers."
+            )
+
     normalized_a = matrix_a / np.linalg.norm(matrix_a, axis=1, keepdims=True)
     normalized_b = matrix_b / np.linalg.norm(matrix_b, axis=1, keepdims=True)
     similarity = normalized_a @ normalized_b.T
