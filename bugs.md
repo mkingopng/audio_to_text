@@ -28,6 +28,7 @@ with a measured status.
 > uv run python tools/capture_fusion_intermediates.py
 >
 > uv run python tools/measure_offset_confidence.py   # offset + null controls
+> uv run python tools/measure_dc_bias.py            # offset search vs a DC-heavy envelope
 > uv run python tools/measure_containment_guard.py   # guard yield by radius/floor
 > uv run python tools/measure_smoothing.py           # micro-turn candidates, with context
 > uv run python tools/analyze_cross_speaker.py       # cross-speaker pair origins
@@ -343,11 +344,26 @@ runs, and the separation they justify has not been re-measured.
 
 Not fixed: re-measuring needs the 70-minute pair, which is not committed. The threshold
 only ever *warns*, so a mis-set value costs a spurious warning or a missing one rather
-than a wrong transcript. On synthetic speech-like audio every trial scored 1.04–1.14 —
-below 1.2 — including the ones that recovered the offset correctly, which suggests the
-threshold is now too high for short-secondary pairs and would warn on everything. That is
-one synthetic distribution and not grounds to move a calibrated constant, but it is the
-first thing to check against a real capture.
+than a wrong transcript.
+
+**The change appears to have improved the metric, not just moved it.** On 20 synthetic
+speech-like pairs (5-minute primary, 30-second secondary attenuated to 0.35 with its own
+noise floor, true offset +60 s), measured before and after with
+`tools/measure_dc_bias.py`:
+
+| | offsets recovered | confidence range | would warn |
+|---|---|---|---|
+| before | 19/20 | 1.005–1.14 | 20/20 |
+| after | **20/20** | **1.276–1.652** | **0/20** |
+
+Before the fix the threshold fired on every run in this regime, including the 19 correct
+ones — the warning was noise. After it, correct alignments clear 1.2 with margin. The one
+pre-fix failure scored 1.005, so the warning did catch it.
+
+This is one synthetic distribution and does **not** re-validate the 1.2 line against real
+audio; the true-pair figure of 1.5162 still describes the old computation. It does mean
+the threshold is no longer suspected of being too high, which is what the first version of
+this entry claimed.
 
 ## OPEN — `find_offset` is no longer on the production path
 
