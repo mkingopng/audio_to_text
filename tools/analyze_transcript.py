@@ -8,7 +8,7 @@ can be checked rather than taken on trust.
 Reports:
   * redundancy   -- near-duplicate text between blocks, scanned at block distances
                     1..5 and split by same-speaker vs cross-speaker. Distance > 1
-                    matters: _group_consecutive flushes on every speaker change, so
+                    matters: group_consecutive flushes on every speaker change, so
                     two same-speaker turns are ALWAYS separated by at least one
                     intervening turn. An adjacent-only scan cannot see the
                     same-speaker case at all.
@@ -139,7 +139,7 @@ def report_fragmentation(blocks: list[dict]) -> None:
 
     adjacent_same = sum(1 for i in range(len(blocks) - 1) if speakers[i] == speakers[i + 1])
     print(f"\n   adjacent SAME-speaker block pairs: {adjacent_same}")
-    print("   (_group_consecutive can never emit these -- they indicate turns appended")
+    print("   (group_consecutive can never emit these -- they indicate turns appended")
     print("    post-grouping, i.e. by fusion's merge_turns gap-fill, never re-grouped)\n")
 
 

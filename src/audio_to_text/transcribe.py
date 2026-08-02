@@ -224,7 +224,7 @@ def _join_words(words: list[str]) -> str:
     return "".join(words).strip()
 
 
-def _group_consecutive(aligned_words: list[dict]) -> list[dict]:
+def group_consecutive(aligned_words: list[dict]) -> list[dict]:
     """Merge consecutive same-speaker words into turns, keeping original speaker ids.
 
     Returned turns are NOT relabeled to "Person N" -- fusion (Task 10) needs the
@@ -450,7 +450,7 @@ def smooth_micro_turns(turns: list[dict]) -> list[dict]:
     were taken from.
 
     pyannote emits very short turns (42 of 96 under 0.5 s on a sampled slice, p10
-    = 0.02 s); align_words_to_speakers assigns words to them and _group_consecutive
+    = 0.02 s); align_words_to_speakers assigns words to them and group_consecutive
     faithfully starts a new block at each switch. The result is that roughly a
     quarter of blocks hold a single word, and half the document's headings
     introduce fragments like "So", "the", "it?".
@@ -510,7 +510,7 @@ def group_into_turns(aligned_words: list[dict], *, smooth: bool = False) -> list
     hand-checked on one meeting. That earns an opt-in, not a default -- a wrong
     absorption puts words in someone else's mouth, silently.
     """
-    grouped = _group_consecutive(aligned_words)
+    grouped = group_consecutive(aligned_words)
     if smooth:
         grouped = smooth_micro_turns(grouped)
     return relabel_speakers(grouped)
@@ -609,12 +609,16 @@ def load_diarization_pipeline(hf_token: str | None):
     try:
         pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", token=hf_token)
     except Exception as exc:
+        # Deliberately a LIST of causes, not a diagnosis. This catches everything
+        # -- a network outage, a full disk and a corrupt HF cache all land here --
+        # and naming only the token sends people to re-check a token that was fine.
         raise RuntimeError(
-            "Failed to load the pyannote diarization pipeline. This usually means either "
-            "HF_TOKEN is invalid/expired, or the pyannote/speaker-diarization-3.1 model "
-            "terms haven't been accepted yet at "
-            "https://huggingface.co/pyannote/speaker-diarization-3.1. "
-            f"Underlying error: {exc}"
+            "Failed to load the pyannote diarization pipeline. Common causes, in "
+            "rough order: HF_TOKEN is invalid or expired; the "
+            "pyannote/speaker-diarization-3.1 model terms haven't been accepted at "
+            "https://huggingface.co/pyannote/speaker-diarization-3.1; no network "
+            "connection for the first download; or a corrupt Hugging Face cache. "
+            f"Underlying error ({type(exc).__name__}): {exc}"
         ) from exc
     try:
         import torch

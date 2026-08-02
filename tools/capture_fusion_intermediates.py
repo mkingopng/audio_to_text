@@ -25,7 +25,7 @@ OUT = CAPTURE_DIR
 
 from audio_to_text.transcribe import (  # noqa: E402
     align_words_to_speakers,
-    _group_consecutive,
+    group_consecutive,
     extract_words,
     load_diarization_pipeline,
     preprocess_audio,
@@ -57,7 +57,7 @@ def process(tag: str, media: Path, pipeline) -> dict:
     print(f"[{tag}] diarization: {len(diar_turns)} turns ({time.time()-t0:.0f}s)", flush=True)
 
     aligned = align_words_to_speakers(words, diar_turns)
-    grouped = _group_consecutive(aligned)
+    grouped = group_consecutive(aligned)
     print(f"[{tag}] grouped: {len(grouped)} turns", flush=True)
     return {
         "wav": wav, "words": words, "diar_turns": diar_turns,

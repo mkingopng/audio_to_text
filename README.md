@@ -110,6 +110,8 @@ audio-to-text --denoise             # adds FFT noise reduction
 audio-to-text --audio-filter "..."  # your own ffmpeg -af chain
 ```
 
+These apply to fused runs too — `--fuse other.m4a --denoise` cleans both sources.
+
 Transcripts go to `./data/transcriptions/`, created if it doesn't exist. Override with
 `--output-dir`.
 
@@ -130,7 +132,13 @@ Offset: +26.1s (alignment confidence 1.52)
 
 Above ~1.2 the two recordings clearly share acoustic content. Near 1.00 they do not, and
 you get a warning — the two files may not be the same meeting, or may barely overlap.
-Measured on a real pair: a true match scores 1.52, unrelated audio scores 1.000–1.005.
+Measured on a real pair: a true match scored 1.52, unrelated audio 1.000–1.005.
+
+Treat the 1.2 line as approximate. Those figures were measured before the correlation was
+mean-subtracted, so they describe a slightly different computation than the one now
+running, and they have not been re-measured against a real pair — see `bugs.md`. The
+threshold only ever warns, so a mis-set value costs you a spurious warning or a missing
+one, never a different transcript.
 
 **Repetition loops.** Whisper sometimes gets stuck on quiet or ambiguous audio and emits
 one word hundreds of times. It is an upstream flaw and this tool cannot fix it, but it
@@ -197,7 +205,10 @@ different times, cluster speakers independently, and disagree about who said wha
    ASR passes word-by-word garbles sentences wherever the passes segment speech differently.
 
 Speech only one microphone caught is appended rather than dropped, which on the reference
-recordings recovered about 160 turns that a naive time-overlap check discarded.
+recordings recovered about 160 turns that a naive time-overlap check discarded. "Already
+covered" is judged by how much of a turn the other source overlaps, not by whether it
+overlaps at all — a single shared instant used to suppress a whole turn, so a source that
+kept recording after the other cut out lost everything it caught alone.
 
 ## Development
 

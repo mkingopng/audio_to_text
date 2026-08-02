@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from audio_to_text.transcribe import align_words_to_speakers
 from audio_to_text.transcribe import (
-    _group_consecutive,
+    group_consecutive,
     group_into_turns,
     relabel_speakers,
     render_markdown,
@@ -65,14 +65,14 @@ def test_align_words_to_speakers_handles_gap_with_no_overlapping_turn():
     assert result[0]["speaker"] == "SPEAKER_01"
 
 
-def test_group_consecutive_merges_same_speaker_words_into_one_turn():
+def testgroup_consecutive_merges_same_speaker_words_into_one_turn():
     aligned = [
         {"word": "Hello", "start": 0.0, "end": 0.5, "probability": 0.9, "speaker": "SPEAKER_00"},
         {"word": " there", "start": 0.5, "end": 1.0, "probability": 0.8, "speaker": "SPEAKER_00"},
         {"word": " hi", "start": 1.0, "end": 1.3, "probability": 0.7, "speaker": "SPEAKER_01"},
     ]
 
-    turns = _group_consecutive(aligned)
+    turns = group_consecutive(aligned)
 
     assert len(turns) == 2
     assert turns[0]["speaker"] == "SPEAKER_00"

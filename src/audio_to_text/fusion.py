@@ -18,7 +18,7 @@ from scipy.optimize import linear_sum_assignment
 
 from audio_to_text.transcribe import (
     align_words_to_speakers,
-    _group_consecutive,
+    group_consecutive,
     extract_words,
     overlap_seconds,
     preprocess_audio,
@@ -221,7 +221,7 @@ def _shift_and_remap(turns: list[dict], offset: float, speaker_map: dict[str, st
 
 # How far, in A-turn index terms, the containment guard looks for a sibling.
 #
-# Must be >= 2. _group_consecutive flushes a turn on EVERY speaker change, so two
+# Must be >= 2. group_consecutive flushes a turn on EVERY speaker change, so two
 # same-speaker A turns are never adjacent -- a radius-1 guard is structurally
 # incapable of firing on the same-speaker case, and measuring it on the real pair
 # confirms it: 0 same-speaker fires at radius 1, 13 at radius 2. Beyond 2 adds
@@ -243,7 +243,7 @@ _CONTAINMENT_MIN_CHARS = 20
 # The duplication this guard removes is ONE utterance that A's diarization split
 # in two and B's kept whole, so the halves are consecutive stretches of speech --
 # separated at most by a short interjection from someone else, since
-# _group_consecutive flushes on every speaker change. Overlapping B's span is not
+# group_consecutive flushes on every speaker change. Overlapping B's span is not
 # a sufficient bound: a long B turn spans minutes, and anything inside it with
 # matching text was consumed, so a speaker restating a stock phrase half a minute
 # later had that restatement deleted.
@@ -407,7 +407,7 @@ def _process_source(media_path: Path, tmp_dir: Path, *, model_repo, language, in
     words = extract_words(result)
     turns, embeddings = run_diarization(wav_path, diarization_pipeline, num_speakers=num_speakers)
     aligned = align_words_to_speakers(words, turns)
-    return wav_path, _group_consecutive(aligned), embeddings
+    return wav_path, group_consecutive(aligned), embeddings
 
 
 def run_fusion(

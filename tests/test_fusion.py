@@ -778,7 +778,7 @@ def test_containment_guard_ignores_a_distant_sibling_inside_b_span():
         {"speaker": "S1", "start": 5.0, "end": 6.0, "text": "hmm", "confidence": 0.9},
         # 25 seconds later, but still inside B's 0.1-40.0 span, and only two
         # A-turn indices away -- which is the NORMAL distance between two
-        # same-speaker turns, since _group_consecutive flushes on every change.
+        # same-speaker turns, since group_consecutive flushes on every change.
         {"speaker": "S0", "start": 30.0, "end": 33.0, "text": restatement, "confidence": 0.9},
     ]
     turns_b_shifted = [
