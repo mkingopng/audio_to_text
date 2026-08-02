@@ -1166,3 +1166,161 @@ def test_run_fusion_end_to_end_over_the_real_pipeline(tmp_path, monkeypatch):
     # ...and landed on A's timeline, at 00:20 and 00:23 rather than 00:00/00:03.
     assert "## Person 1 — 00:20" in rendered, rendered
     assert "## Person 2 — 00:23" in rendered, rendered
+
+
+# --- cross-speaker duplicate detection: the constants, pinned two-sided --------
+#
+# Previously one happy-path wiring test covered all of this, so every threshold
+# was free to move in the destructive direction and the loop exclusion was
+# unreachable. Each test below names the mutation it kills.
+
+def _dup_turns(texts, *, speakers=None, gap=10.0):
+    """Blocks far enough apart in time that repetition-loop detection is not
+    triggered by the fixture itself."""
+    speakers = speakers or [f"Person {1 + i % 2}" for i in range(len(texts))]
+    return [
+        {"speaker": speakers[i], "start": i * gap, "end": i * gap + 1.0, "text": text}
+        for i, text in enumerate(texts)
+    ]
+
+
+_DUP_SENTENCE = "we should approve the budget before friday afternoon"  # 51 normalized chars
+
+
+def test_cross_speaker_duplicate_detection_fires_on_a_real_duplicate():
+    """Baseline. Kills _DUPLICATE_MIN_SHARED_CHARS raised (40 -> 200) and
+    _DUPLICATE_MIN_SHARE raised (0.5 -> 0.99)."""
+    from audio_to_text.transcribe import detect_cross_speaker_duplicates
+
+    found = detect_cross_speaker_duplicates(_dup_turns([_DUP_SENTENCE, _DUP_SENTENCE]))
+
+    assert len(found) == 1
+    assert found[0]["speakers"] == ("Person 1", "Person 2")
+
+
+def test_cross_speaker_duplicate_detection_ignores_a_short_shared_span():
+    """Kills _DUPLICATE_MIN_SHARED_CHARS lowered (40 -> 5), which would flood the
+    warning with every pair of blocks sharing a common phrase."""
+    from audio_to_text.transcribe import detect_cross_speaker_duplicates
+
+    # 29 shared characters -- a stock opening, not a duplicated utterance.
+    found = detect_cross_speaker_duplicates(
+        _dup_turns(["we should approve the budget xx", "we should approve the budget yy"])
+    )
+
+    assert found == []
+
+
+def test_cross_speaker_duplicate_detection_requires_the_span_to_dominate_the_block():
+    """The shared span must cover most of the SHORTER block, not just clear the
+    absolute floor. Kills _DUPLICATE_MIN_SHARE lowered (0.5 -> 0.0): a 45-char
+    quotation inside two otherwise different 100+ char blocks is someone
+    repeating a phrase, not one utterance rendered twice.
+    """
+    from audio_to_text.transcribe import detect_cross_speaker_duplicates
+
+    quoted = "we should approve the budget before friday ab"  # 45 chars: over the floor
+    first = quoted + " and then i went on at considerable length about something else entirely"
+    second = quoted + " but she disagreed and said we ought to wait until the new quarter"
+
+    found = detect_cross_speaker_duplicates(_dup_turns([first, second]))
+
+    assert found == []
+
+
+def test_cross_speaker_duplicate_detection_spans_exactly_five_blocks():
+    """Two-sided pin on _DUPLICATE_MAX_DISTANCE. A duplicate five blocks apart
+    must be found (kills 5 -> 1); one six apart must not (kills 5 -> 50, which
+    would pair blocks minutes apart that merely share a stock sentence).
+
+    The filler blocks are all DIFFERENT from each other on purpose. Identical
+    filler pairs with itself at distance 1, which would satisfy this test's
+    assertion for entirely the wrong reason and let 5 -> 1 survive.
+    """
+    from audio_to_text.transcribe import detect_cross_speaker_duplicates
+
+    filler = [
+        "unrelated chatter about the weather this morning and the traffic",
+        "someone asking whether anybody had seen the latest quarterly figures",
+        "a question about parking validation that nobody seems able to answer",
+        "the sound of a door closing and a chair being pulled out loudly",
+        "a completely separate tangent concerning the office coffee machine",
+    ]
+
+    at_five = _dup_turns([_DUP_SENTENCE] + filler[:4] + [_DUP_SENTENCE])
+    found_five = detect_cross_speaker_duplicates(at_five)
+    assert any(f["start"] == 0.0 for f in found_five), (
+        f"a duplicate five blocks apart was not found: {found_five}"
+    )
+
+    # Explicit speakers: with seven blocks the alternating default puts index 0
+    # and index 6 under the SAME speaker, so the pair would be skipped by the
+    # same-speaker rule before distance was ever consulted -- and 5 -> 50 would
+    # survive for a reason that has nothing to do with distance.
+    at_six = _dup_turns(
+        [_DUP_SENTENCE] + filler + [_DUP_SENTENCE],
+        speakers=["Person 1"] + ["Person 2"] * 5 + ["Person 2"],
+    )
+    found_six = detect_cross_speaker_duplicates(at_six)
+    assert found_six == [], f"paired blocks six apart: {found_six}"
+
+
+def test_cross_speaker_duplicate_detection_fires_below_total_identity():
+    """The share bound must admit a real duplicate that is not character-identical
+    -- two ASR passes rarely produce byte-identical text. Kills
+    _DUPLICATE_MIN_SHARE raised (0.5 -> 0.99), which the identical-text baseline
+    above cannot: there shared == len, so any share threshold under 1.0 passes.
+    """
+    from audio_to_text.transcribe import detect_cross_speaker_duplicates
+
+    shared = "we should approve the budget before friday ab"  # 45 chars, over the floor
+    # ~0.75 of the shorter block -- clearly one utterance, not byte-identical.
+    turns = _dup_turns([shared + " i think", shared + " i guess"])
+
+    assert len(detect_cross_speaker_duplicates(turns)) == 1
+
+
+def test_cross_speaker_duplicate_detection_skips_same_speaker_pairs():
+    """The warning's text says "under two different speakers", and the whole
+    premise is that one of the two attributions must be wrong. Two blocks under
+    the SAME speaker are a redundancy question, not an attribution one. Kills
+    dropping the first["speaker"] == second["speaker"] skip.
+    """
+    from audio_to_text.transcribe import detect_cross_speaker_duplicates
+
+    turns = _dup_turns([_DUP_SENTENCE, _DUP_SENTENCE], speakers=["Person 1", "Person 1"])
+
+    assert detect_cross_speaker_duplicates(turns) == []
+
+
+def test_cross_speaker_duplicate_detection_normalizes_case_and_punctuation():
+    """Two ASR passes punctuate and capitalise differently; the same sentence
+    must still match across that. Kills normalize() -> identity."""
+    from audio_to_text.transcribe import detect_cross_speaker_duplicates
+
+    turns = _dup_turns([
+        "We should approve the budget, before Friday afternoon!",
+        "we should approve the budget before friday afternoon",
+    ])
+
+    assert len(detect_cross_speaker_duplicates(turns)) == 1
+
+
+def test_cross_speaker_duplicate_detection_excludes_a_real_repetition_loop():
+    """Rewritten: the previous fixture used "Paul." -- 4 normalized characters
+    against a 40-character floor, so its empty result was guaranteed by the floor
+    alone and was completely insensitive to the loop exclusion it claimed to
+    test. Deleting the exclusion left the suite green.
+
+    A real Whisper loop is a long run of one token, which diarization jitter then
+    shreds across blocks attributed to different speakers. Each block is well
+    over the floor and matches its neighbours almost exactly, so without the
+    exclusion every adjacent pair is reported as a speaker-attribution problem
+    when the actual fault is upstream in Whisper.
+    """
+    from audio_to_text.transcribe import detect_cross_speaker_duplicates
+
+    block = " ".join(["paul"] * 12)  # 59 normalized chars, and part of a 72-token run
+    turns = _dup_turns([block] * 6, gap=1.0)
+
+    assert detect_cross_speaker_duplicates(turns) == []
