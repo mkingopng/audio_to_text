@@ -14,6 +14,22 @@ from audio_to_text.transcribe import build_ffmpeg_args
 from audio_to_text.transcribe import extract_words, run_whisper
 
 
+def _fake_preprocess(media_path, tmp_dir, audio_filter):
+    """Stand in for ffmpeg, returning a DISTINCT temp WAV path.
+
+    Deliberately not `lambda ...: media_path`. Returning the original collapses
+    the temp-WAV/original distinction that main() depends on in two places: the
+    output is named after media_path.stem (returning source.stem would write
+    "meeting.clean.md"), and the per-file cleanup unlinks the temp WAV (with the
+    two collapsed, that deleted the user's recording). Both regressions were
+    invisible while this returned its input.
+    """
+    wav = tmp_dir / (media_path.stem + ".clean.wav")
+    wav.write_bytes(b"")
+    return wav
+
+
+
 def test_align_words_to_speakers_assigns_by_max_overlap():
     turns = [
         {"start": 0.0, "end": 5.0, "speaker": "SPEAKER_00"},
@@ -311,7 +327,7 @@ def test_main_continues_batch_after_diarization_failure(tmp_path, capsys):
          patch.object(t, "gather_media", return_value=media_files), \
          patch.object(t, "resolve_hf_token", return_value="fake-token"), \
          patch.object(t, "load_diarization_pipeline", return_value=object()), \
-         patch.object(t, "preprocess_audio", side_effect=lambda media_path, tmp_dir, audio_filter: media_path), \
+         patch.object(t, "preprocess_audio", side_effect=_fake_preprocess), \
          patch.object(t, "run_whisper", return_value=fake_result), \
          patch.object(t, "run_diarization", side_effect=fake_run_diarization):
         exit_code = t.main(["ignored.m4a", "--output-dir", str(tmp_path)])

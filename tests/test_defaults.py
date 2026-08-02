@@ -7,6 +7,22 @@ from audio_to_text.transcribe import (
 )
 
 
+def _fake_preprocess(media_path, tmp_dir, audio_filter):
+    """Stand in for ffmpeg, returning a DISTINCT temp WAV path.
+
+    Deliberately not `lambda ...: media_path`. Returning the original collapses
+    the temp-WAV/original distinction that main() depends on in two places: the
+    output is named after media_path.stem (returning source.stem would write
+    "meeting.clean.md"), and the per-file cleanup unlinks the temp WAV (with the
+    two collapsed, that deleted the user's recording). Both regressions were
+    invisible while this returned its input.
+    """
+    wav = tmp_dir / (media_path.stem + ".clean.wav")
+    wav.write_bytes(b"")
+    return wav
+
+
+
 def test_default_input_dir_follows_cwd(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
 
@@ -150,7 +166,7 @@ def test_main_writes_into_data_transcriptions_by_default(monkeypatch, tmp_path):
         m.setattr(t, "ensure_apple_silicon", lambda: None)
         m.setattr(t, "resolve_hf_token", lambda: "fake-token")
         m.setattr(t, "load_diarization_pipeline", lambda token: object())
-        m.setattr(t, "preprocess_audio", lambda media_path, tmp_dir, audio_filter: media_path)
+        m.setattr(t, "preprocess_audio", _fake_preprocess)
         m.setattr(t, "run_whisper", lambda *a, **k: fake_result)
         m.setattr(
             t, "run_diarization",
@@ -193,7 +209,7 @@ def test_main_warns_on_repetition_loop_in_the_single_file_path(monkeypatch, tmp_
         m.setattr(t, "ensure_apple_silicon", lambda: None)
         m.setattr(t, "resolve_hf_token", lambda: "fake-token")
         m.setattr(t, "load_diarization_pipeline", lambda token: object())
-        m.setattr(t, "preprocess_audio", lambda media_path, tmp_dir, audio_filter: media_path)
+        m.setattr(t, "preprocess_audio", _fake_preprocess)
         m.setattr(t, "run_whisper", lambda *a, **k: fake_result)
         m.setattr(
             t, "run_diarization",
@@ -240,7 +256,7 @@ def test_main_does_not_smooth_by_default_and_does_with_the_flag(monkeypatch, tmp
             m.setattr(t, "ensure_apple_silicon", lambda: None)
             m.setattr(t, "resolve_hf_token", lambda: "fake-token")
             m.setattr(t, "load_diarization_pipeline", lambda token: object())
-            m.setattr(t, "preprocess_audio", lambda media_path, tmp_dir, audio_filter: media_path)
+            m.setattr(t, "preprocess_audio", _fake_preprocess)
             m.setattr(t, "run_whisper", lambda *a, **k: fake_result)
             m.setattr(
                 t, "run_diarization",
@@ -325,3 +341,133 @@ def test_main_fuse_passes_the_audio_filter_through_to_run_fusion(monkeypatch, tm
 
     assert t.main([str(primary), "--fuse", str(secondary)]) == 0
     assert seen["audio_filter"] is None, "no cleanup flags means no filter"
+
+
+def test_main_writes_the_actual_transcript_and_cleans_up_the_temp_wav(monkeypatch, tmp_path):
+    """main()'s output WRITING was never asserted -- only that a file appeared.
+    Replacing the write with out_path.write_text("") left the whole suite green,
+    so every transcript could ship empty and nothing would notice.
+
+    Also pins the per-file temp-WAV cleanup, which must remove the cleaned WAV
+    and must never touch the user's original recording.
+    """
+    import audio_to_text.transcribe as t
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data").mkdir()
+    original = tmp_path / "data" / "meeting.m4a"
+    original.write_bytes(b"the user's irreplaceable recording")
+    # A second file, so cleanup of the first can be observed WHILE the run is
+    # still going. Checking after main() returns proves nothing: the whole
+    # TemporaryDirectory is torn down on the way out, so every WAV is gone by
+    # then whether or not the per-file cleanup ever ran.
+    (tmp_path / "data" / "second.m4a").touch()
+
+    fake_result = {"segments": [{"words": [
+        {"word": "hello", "start": 0.0, "end": 0.5, "probability": 0.9},
+        {"word": " there", "start": 0.5, "end": 1.0, "probability": 0.9},
+    ]}]}
+
+    seen_wavs = []
+    survivors_at_next_file = []
+
+    def tracking_preprocess(media_path, tmp_dir, audio_filter):
+        survivors_at_next_file.extend(w for w in seen_wavs if w.exists())
+        wav = _fake_preprocess(media_path, tmp_dir, audio_filter)
+        seen_wavs.append(wav)
+        return wav
+
+    with monkeypatch.context() as m:
+        m.setattr(t, "ensure_apple_silicon", lambda: None)
+        m.setattr(t, "resolve_hf_token", lambda: "fake-token")
+        m.setattr(t, "load_diarization_pipeline", lambda token: object())
+        m.setattr(t, "preprocess_audio", tracking_preprocess)
+        m.setattr(t, "run_whisper", lambda *a, **k: fake_result)
+        m.setattr(
+            t, "run_diarization",
+            lambda source, pipeline, *, num_speakers=None: (
+                [{"start": 0.0, "end": 1.0, "speaker": "SPEAKER_00"}], {}
+            ),
+        )
+        assert t.main([]) == 0
+
+    written = (tmp_path / "data" / "transcriptions" / "meeting.md").read_text(encoding="utf-8")
+    assert "## Person 1 — 00:00" in written, written
+    assert "hello there" in written, written
+
+    assert len(seen_wavs) == 2
+    assert survivors_at_next_file == [], (
+        "a cleaned WAV was still on disk when the next file started; they "
+        "accumulate across the whole batch"
+    )
+    # The cleanup deletes files. It must never reach the user's recording.
+    assert original.read_bytes() == b"the user's irreplaceable recording"
+
+
+def test_main_reports_a_file_with_no_speech_rather_than_writing_an_empty_transcript(
+    monkeypatch, tmp_path, capsys
+):
+    """render_markdown([]) is a single newline. Writing it, printing "-> wrote"
+    and exiting 0 announces a transcript that contains nothing."""
+    import audio_to_text.transcribe as t
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "silent.m4a").touch()
+
+    with monkeypatch.context() as m:
+        m.setattr(t, "ensure_apple_silicon", lambda: None)
+        m.setattr(t, "resolve_hf_token", lambda: "fake-token")
+        m.setattr(t, "load_diarization_pipeline", lambda token: object())
+        m.setattr(t, "preprocess_audio", _fake_preprocess)
+        m.setattr(t, "run_whisper", lambda *a, **k: {"segments": []})
+        m.setattr(
+            t, "run_diarization",
+            lambda source, pipeline, *, num_speakers=None: (
+                [{"start": 0.0, "end": 1.0, "speaker": "SPEAKER_00"}], {}
+            ),
+        )
+        exit_code = t.main([])
+
+    assert exit_code == 1
+    assert "no speech found" in capsys.readouterr().err
+    assert not (tmp_path / "data" / "transcriptions" / "silent.md").exists()
+
+
+def test_main_never_deletes_a_file_outside_its_temp_dir(monkeypatch, tmp_path):
+    """The per-file cleanup deletes things, so it is restricted to files inside
+    the run's own temp dir.
+
+    preprocess_audio is expected to return a temp WAV. If it ever returned the
+    original -- which is exactly what this suite's own mocks used to do -- then
+    "unlink whatever that returned" erases the user's recording. Nothing else
+    pins that restriction, so it goes here rather than relying on the mock.
+    """
+    import audio_to_text.transcribe as t
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data").mkdir()
+    original = tmp_path / "data" / "meeting.m4a"
+    original.write_bytes(b"irreplaceable")
+
+    fake_result = {"segments": [{"words": [
+        {"word": "hi", "start": 0.0, "end": 0.5, "probability": 0.9},
+    ]}]}
+
+    with monkeypatch.context() as m:
+        m.setattr(t, "ensure_apple_silicon", lambda: None)
+        m.setattr(t, "resolve_hf_token", lambda: "fake-token")
+        m.setattr(t, "load_diarization_pipeline", lambda token: object())
+        # The pathological case: hands back the input itself.
+        m.setattr(t, "preprocess_audio", lambda media_path, tmp_dir, audio_filter: media_path)
+        m.setattr(t, "run_whisper", lambda *a, **k: fake_result)
+        m.setattr(
+            t, "run_diarization",
+            lambda source, pipeline, *, num_speakers=None: (
+                [{"start": 0.0, "end": 1.0, "speaker": "SPEAKER_00"}], {}
+            ),
+        )
+        assert t.main([]) == 0
+
+    assert original.exists(), "main() deleted the user's original recording"
+    assert original.read_bytes() == b"irreplaceable"

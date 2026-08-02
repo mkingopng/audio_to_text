@@ -5,7 +5,8 @@ Runs OpenAI's Whisper models via Apple's MLX framework, which executes natively
 on Apple Silicon GPUs (Metal) -- far faster than the CPU-only path of the
 reference `openai-whisper` package. ffmpeg (used by MLX) decodes the audio track
 directly, so audio files (.m4a, .mp3, .wav, ...) and video files (.mp4, .mov, ...)
-both work through the same path -- no separate audio-extraction step is required.
+both work through the same path. Audio is always extracted to a 16kHz mono WAV
+first, since diarization needs one.
 
 Installed as `audio-to-text` on PATH, so it can be called from any project. Run
 with no arguments to transcribe every media file in ./data/, writing one .md per
@@ -31,8 +32,8 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -92,7 +93,13 @@ def resolve_output_dir(arg: Path | None) -> Path:
     project root.
     """
     out = (arg or Path.cwd() / DEFAULT_OUTPUT_SUBDIR).resolve()
-    out.mkdir(parents=True, exist_ok=True)
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        # e.g. --output-dir pointing at an existing FILE. Uncaught this exits with
+        # a traceback rather than the "error: ..." line every other path produces,
+        # which matters more now the tool is on PATH and run from anywhere.
+        raise RuntimeError(f"cannot use '{out}' as the output directory: {exc}") from exc
     return out
 
 
@@ -758,6 +765,13 @@ def main(argv: list[str] | None = None) -> int:
 
     ensure_apple_silicon()
 
+    # --fuse is validated FIRST: gather_media's "no media files found in X"
+    # otherwise pre-empts it, so `--fuse b.m4a somedir/` reported an input-scan
+    # failure instead of the actual mistake.
+    if args.fuse is not None and (args.media is None or args.media.is_dir()):
+        print("error: --fuse requires 'media' to be a single file, not a directory/default batch", file=sys.stderr)
+        return 1
+
     media_files = gather_media(args.media)
     if not media_files:
         if args.media is not None:
@@ -802,7 +816,11 @@ def main(argv: list[str] | None = None) -> int:
         except RuntimeError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
-        output_dir = resolve_output_dir(args.output_dir)
+        try:
+            output_dir = resolve_output_dir(args.output_dir)
+        except RuntimeError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
         try:
             out_path = run_fusion(
                 args.media,
@@ -843,7 +861,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    output_dir = resolve_output_dir(args.output_dir)
+    try:
+        output_dir = resolve_output_dir(args.output_dir)
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
     print(f"Model: {model_repo} (first run downloads the weights from Hugging Face)")
     if do_preprocess:
@@ -859,6 +881,7 @@ def main(argv: list[str] | None = None) -> int:
     with tempfile.TemporaryDirectory(prefix="whisper_clean_") as tmp:
         tmp_dir = Path(tmp)
         for media_path in file_iter:
+            source: Path | None = None
             try:
                 source = preprocess_audio(media_path, tmp_dir, audio_filter)
                 print(f"Transcribing '{media_path.name}' ...")
@@ -901,6 +924,25 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             except DiarizationError as exc:
                 print(f"error: {exc}", file=sys.stderr)
+                failures += 1
+                continue
+            finally:
+                # Free each cleaned WAV as soon as its file is done. The
+                # TemporaryDirectory spans the whole batch, and preprocess_audio
+                # writes a fresh 16kHz mono WAV per iteration (~115 MB per hour of
+                # audio), so a folder of long recordings accumulated gigabytes
+                # before anything was released -- and ffmpeg failed partway
+                # through the batch on a full disk.
+                # ONLY files we created inside tmp_dir. preprocess_audio is
+                # expected to return a temp WAV, but this deletes things, and
+                # "delete whatever that returned" would erase the user's original
+                # recording the moment that ever stopped holding.
+                if source is not None and source.parent == tmp_dir:
+                    source.unlink(missing_ok=True)
+            if not speaker_turns:
+                # render_markdown([]) is a single newline. Writing it, announcing
+                # success and exiting 0 reports a transcript that contains nothing.
+                print(f"error: no speech found in '{media_path.name}'", file=sys.stderr)
                 failures += 1
                 continue
             # Name the output after the original file, not the temp cleaned WAV.

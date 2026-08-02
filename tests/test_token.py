@@ -6,6 +6,22 @@ import pytest
 from audio_to_text.transcribe import resolve_hf_token
 
 
+def _fake_preprocess(media_path, tmp_dir, audio_filter):
+    """Stand in for ffmpeg, returning a DISTINCT temp WAV path.
+
+    Deliberately not `lambda ...: media_path`. Returning the original collapses
+    the temp-WAV/original distinction that main() depends on in two places: the
+    output is named after media_path.stem (returning source.stem would write
+    "meeting.clean.md"), and the per-file cleanup unlinks the temp WAV (with the
+    two collapsed, that deleted the user's recording). Both regressions were
+    invisible while this returned its input.
+    """
+    wav = tmp_dir / (media_path.stem + ".clean.wav")
+    wav.write_bytes(b"")
+    return wav
+
+
+
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch, tmp_path):
     """Every test starts with no ambient token and a cwd with no .env."""
@@ -93,7 +109,7 @@ def test_main_passes_the_resolved_token_to_the_pipeline(monkeypatch, tmp_path):
 
     monkeypatch.setattr(t, "ensure_apple_silicon", lambda: None)
     monkeypatch.setattr(t, "load_diarization_pipeline", capture)
-    monkeypatch.setattr(t, "preprocess_audio", lambda media_path, tmp_dir, audio_filter: media_path)
+    monkeypatch.setattr(t, "preprocess_audio", _fake_preprocess)
     monkeypatch.setattr(t, "run_whisper", lambda *a, **k: fake_result)
     monkeypatch.setattr(
         t, "run_diarization",

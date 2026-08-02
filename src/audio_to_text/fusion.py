@@ -81,6 +81,16 @@ def _correlate_envelopes(
     if rate_a != rate_b:
         raise ValueError(f"sample rate mismatch between sources: {rate_a} vs {rate_b}")
 
+    for wav, samples, rate in ((wav_a, samples_a, rate_a), (wav_b, samples_b, rate_b)):
+        if len(samples) < int(rate * window_seconds):
+            # Shorter than one window means an empty envelope, which surfaces
+            # several frames down as a raw scipy IndexError that says nothing
+            # about the input. IndexError is not caught by main's --fuse handler.
+            raise ValueError(
+                f"'{wav.name}' is too short to align: "
+                f"{len(samples) / rate:.3f}s of audio, need at least {window_seconds}s"
+            )
+
     envelope_a = _rms_envelope(samples_a, rate_a, window_seconds)
     envelope_b = _rms_envelope(samples_b, rate_b, window_seconds)
 
