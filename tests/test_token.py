@@ -133,3 +133,40 @@ def test_does_not_mutate_process_environment(monkeypatch, tmp_path):
     resolve_hf_token()
 
     assert "HF_TOKEN" not in os.environ
+
+
+def test_fuse_path_uses_the_token_resolution_chain(monkeypatch, tmp_path):
+    """The --fuse branch has its OWN load_diarization_pipeline(resolve_hf_token())
+    call site. The single-file test above claims to be "the only test that fails
+    if main() stops using the resolution chain", but it never reaches this one --
+    reverting the fusion site to os.environ.get("HF_TOKEN") left the suite green,
+    so the tool would silently stop working from another project in --fuse mode
+    while continuing to work in single-file mode.
+    """
+    import audio_to_text.transcribe as t
+
+    (tmp_path / "primary.mp4").touch()
+    (tmp_path / "secondary.m4a").touch()
+    # Token available ONLY via the config-dir leg of the chain -- not the
+    # environment, and not a .env in cwd.
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / ".env").write_text("HF_TOKEN=from-the-config-dir\n")
+    monkeypatch.setattr(t, "CONFIG_DIR", config_dir)
+
+    seen = {}
+
+    def fake_load(token):
+        seen["token"] = token
+        return object()
+
+    monkeypatch.setattr(t, "ensure_apple_silicon", lambda: None)
+    monkeypatch.setattr(t, "load_diarization_pipeline", fake_load)
+    monkeypatch.setattr(
+        "audio_to_text.fusion.run_fusion",
+        lambda a, b, **kw: (kw["output_dir"] / "x.fused.md").write_text("x")
+        or (kw["output_dir"] / "x.fused.md"),
+    )
+
+    assert t.main([str(tmp_path / "primary.mp4"), "--fuse", str(tmp_path / "secondary.m4a")]) == 0
+    assert seen["token"] == "from-the-config-dir"

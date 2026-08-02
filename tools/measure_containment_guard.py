@@ -21,6 +21,7 @@ from pathlib import Path
 
 from audio_to_text import fusion
 from audio_to_text.fusion import merge_turns, match_speakers, _shift_and_remap
+from audio_to_text.transcribe import overlap_seconds
 
 from _capture import require_capture
 
@@ -59,6 +60,20 @@ def instrumented_merge(turns_a, turns_b_shifted):
             merged.append(turn)
     merged.sort(key=lambda t: t["start"])
     return merged, replacement
+
+
+def _temporally_eligible(turns_a, i, j, b):
+    """The two TIME conditions production applies, which this sweep omitted.
+
+    Without these the instrument models a guard that has not shipped since
+    5b91665, and every count it prints overstates what production would consume
+    -- the exact charge bugs.md levels at the prior triage.
+    """
+    if overlap_seconds(turns_a[j]["start"], turns_a[j]["end"], b["start"], b["end"]) <= 0.0:
+        return False
+    gap = max(turns_a[j]["start"] - turns_a[i]["end"],
+              turns_a[i]["start"] - turns_a[j]["end"], 0.0)
+    return gap <= fusion._CONTAINMENT_MAX_GAP_SECONDS
 
 
 def main() -> None:
@@ -105,6 +120,8 @@ def main() -> None:
                     jn = norm(turns_a[j]["text"])
                     if len(jn) < floor or not jn:
                         continue
+                    if not _temporally_eligible(turns_a, i, j, b):
+                        continue
                     if jn in bn:
                         if turns_a[j]["speaker"] == turns_a[i]["speaker"]:
                             same += 1
@@ -124,7 +141,8 @@ def main() -> None:
                 continue
             jn = norm(turns_a[j]["text"])
             if (len(jn) >= fusion._CONTAINMENT_MIN_CHARS and jn in bn
-                    and turns_a[j]["speaker"] == turns_a[i]["speaker"]):
+                    and turns_a[j]["speaker"] == turns_a[i]["speaker"]
+                    and _temporally_eligible(turns_a, i, j, b)):
                 print(f"   A[{i}] replaced; A[{j}] ({len(jn)} chars) fully contained -> consume")
                 print(f"      sibling: {turns_a[j]['text'][:90]!r}")
 
