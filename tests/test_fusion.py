@@ -1062,3 +1062,107 @@ def test_merge_turns_returns_turns_in_chronological_order():
     starts = [t["start"] for t in merged]
     assert starts == sorted(starts), f"merged output is not chronological: {starts}"
     assert [t["text"] for t in merged] == ["early B turn", "late A turn", "later B turn"]
+
+
+def test_run_fusion_end_to_end_over_the_real_pipeline(tmp_path, monkeypatch):
+    """The one test that actually runs run_fusion's pipeline.
+
+    Every other run_fusion test mocks out _process_source and the offset search,
+    so the body composing the pipeline was invisible: a mutation pass found that
+    flipping the offset's sign, skipping merge_turns entirely, skipping
+    relabel_speakers, or hardcoding offset=0.0 each left the whole suite green.
+    Skipping relabel_speakers is the headline product feature -- transcripts
+    would ship with raw "## SPEAKER_00" headings and nothing would notice.
+
+    Worse, the existing fixture returned "SPEAKER_00" for BOTH sources, so the
+    speaker map and its inverse were identical and the map-inversion at the
+    single highest-consequence line could not be got wrong.
+
+    So: mock only ffmpeg (preprocess_audio) and ASR (run_whisper), give the two
+    sources DIFFERENT speaker-label namespaces, and let the real find_offset,
+    match_speakers, _shift_and_remap, merge_turns, relabel_speakers and
+    render_markdown run over real audio with a known offset.
+    """
+    from audio_to_text import fusion
+
+    rate = 1000
+    true_offset = 20.0
+    rng = np.random.default_rng(0)
+    world = _speech_like(60 * rate, rate, rng, floor=0.05)
+    # B started 20s late: its local t=0 is A's t=20.
+    secondary_audio = np.abs(world[int(true_offset * rate):int(28 * rate)] * 0.3 + 0.5)
+
+    wav_for = {}
+
+    def fake_preprocess(media_path, tmp_dir, audio_filter):
+        wav = tmp_dir / (media_path.stem + ".clean.wav")
+        _write_scaled(wav, rate, world if media_path.stem == "teams" else secondary_audio)
+        wav_for[wav] = media_path.stem
+        return wav
+
+    def words(pairs):
+        return {"segments": [
+            {"words": [{"word": w, "start": s, "end": e, "probability": p}
+                       for w, s, e, p in pairs]}
+        ]}
+
+    def fake_run_whisper(wav_path, **kwargs):
+        if wav_for[wav_path] == "teams":
+            # A's clock. Muffled -- low probability, so B's text should win.
+            return words([("alpha", 20.0, 21.0, 0.30), ("mumble", 21.0, 22.0, 0.30),
+                          ("bravo", 23.0, 24.0, 0.30), ("garble", 24.0, 25.0, 0.30)])
+        # B's LOCAL clock: 0.0 here is 20.0 on A's timeline.
+        return words([("alpha", 0.0, 1.0, 0.95), ("clear", 1.0, 2.0, 0.95),
+                      ("bravo", 3.0, 4.0, 0.95), ("crisp", 4.0, 5.0, 0.95)])
+
+    class FakeDiarization:
+        def __init__(self, tracks):
+            self._tracks = tracks
+
+        def itertracks(self, yield_label=True):
+            for start, end, label in self._tracks:
+                yield type("T", (), {"start": start, "end": end})(), None, label
+
+        def labels(self):
+            return sorted({label for _, _, label in self._tracks}, key=str)
+
+    class FakeOutput:
+        def __init__(self, tracks, embeddings):
+            self.speaker_diarization = FakeDiarization(tracks)
+            self.speaker_embeddings = embeddings
+
+    def fake_pipeline(path, **kwargs):
+        # DIFFERENT label namespaces per source, so the a->b map and its inverse
+        # are distinguishable and passing the wrong one cannot go unnoticed.
+        if wav_for[Path(path)] == "teams":
+            return FakeOutput(
+                [(20.0, 22.0, "SPEAKER_00"), (23.0, 25.0, "SPEAKER_01")],
+                np.array([_unit_vector(0), _unit_vector(90)]),
+            )
+        return FakeOutput(
+            [(0.0, 2.0, "SPK_X"), (3.0, 5.0, "SPK_Y")],
+            np.array([_unit_vector(2), _unit_vector(92)]),  # X~=SPEAKER_00, Y~=SPEAKER_01
+        )
+
+    monkeypatch.setattr(fusion, "preprocess_audio", fake_preprocess)
+    monkeypatch.setattr(fusion, "run_whisper", fake_run_whisper)
+
+    out_path = fusion.run_fusion(
+        tmp_path / "teams.mp4", tmp_path / "phone.m4a",
+        model_repo="x", language="en", initial_prompt=None, num_speakers=None,
+        output_dir=tmp_path / "out", diarization_pipeline=fake_pipeline,
+    )
+    rendered = out_path.read_text(encoding="utf-8")
+
+    # Speakers are relabeled -- raw diarization ids must never reach the file.
+    assert "SPEAKER_" not in rendered and "SPK_" not in rendered, rendered
+    assert "## Person 1" in rendered and "## Person 2" in rendered, rendered
+
+    # B's clearer text won both turns, which can only happen if the offset put
+    # B's turns on top of A's. Wrong sign or 0.0 and they never overlap.
+    assert "clear" in rendered and "crisp" in rendered, rendered
+    assert "mumble" not in rendered and "garble" not in rendered, rendered
+
+    # ...and landed on A's timeline, at 00:20 and 00:23 rather than 00:00/00:03.
+    assert "## Person 1 — 00:20" in rendered, rendered
+    assert "## Person 2 — 00:23" in rendered, rendered
